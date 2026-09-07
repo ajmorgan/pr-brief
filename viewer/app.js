@@ -70,6 +70,9 @@ function applySettings({ persist = true } = {}) {
   els.editor.applySettings(settings);
   setBriefRendering(!!brief, { split: settings.diffView === 'split' });
   els.app.dataset.view = effectiveView();
+  // a hidden editor must not keep the keyboard: WebKit still routes typed text to a focused
+  // contenteditable after it is display:none, so a stray key in preview view would edit the document
+  if (effectiveView() === 'preview') els.editor.blur();
   els.app.classList.toggle('sidebar-hidden', !sidebarOpen);
   els.app.classList.toggle('zen', settings.zen);
   els.workspace.style.setProperty('--split', `${settings.split}%`);
@@ -143,7 +146,7 @@ async function openDocument(id) {
   refreshBrief.cancel(); // a pending refresh holds the outgoing document's text
   rememberPosition();
   active = doc;
-  diskDirty = false;
+  diskDirty = !!doc.dirty && !doc.readOnly;
   els.editor.openDocument(doc.id, doc.content, doc.name);
   els.editor.setReadOnly(!!doc.readOnly);
   enterBriefMode(doc.content, { fold: true });
@@ -446,6 +449,7 @@ async function importFiles(list) {
       }
     }
     if (existing) {
+      if (existing.dirty && existing.content === f.content) { existing.dirty = false; await store.putDocument(existing); }
       if (existing.dirty) {
         // the browser copy carries edits not yet on disk: keep them, say if the disk moved on
         if ((f.mtime ?? null) !== existing.mtime) els.toast.show(`${existing.name} changed on disk. Your unsaved edits are kept; reload to see the new version.`, { duration: 8000 });
@@ -787,6 +791,7 @@ function takeStoredPosition(url) {
 async function openRemoteBrief(url) {
   const fresh = await files.fetchRemote(url);
   let doc = docs.find((d) => d.remote === url);
+  if (doc?.dirty && doc.content === fresh.content) { doc.dirty = false; await store.putDocument(doc); } // a stale flag: nothing is unsaved
   if (doc?.dirty) {
     // the browser copy carries edits not yet saved to disk (the reviewer's notes): a page load must not
     // discard them. Open that copy; if the file moved on, offer the reload the watch would offer.

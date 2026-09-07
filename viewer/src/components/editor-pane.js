@@ -415,6 +415,9 @@ export class EditorPane extends HTMLElement {
     this.focus();
   }
 
+  /** Drop keyboard focus, so keys typed while the pane is hidden go nowhere. */
+  blur() { this.#view.contentDOM.blur(); }
+
   /** Cursor at the end of a line (what vim's A does, for when vim is off). */
   gotoLineEnd(line) {
     const doc = this.#view.state.doc;
