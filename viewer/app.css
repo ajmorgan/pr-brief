@@ -536,7 +536,8 @@ app-toast {
 .markdown-body blockquote > ul { margin: 0; }
 
 /* review-brief file sections: a card per file with a sticky heading and a status pill */
-.markdown-body section.rb-file { margin: 1.75em 0; padding: 0 1.2em 0.6em; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.markdown-body section.rb-file { margin: 1.75em 0; padding: 0 1.2em 0.6em; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); content-visibility: auto; }
+.markdown-body .rb-unit { display: flow-root; } /* owns its margins: units tile the card with no gaps between scroll-spy targets */
 .markdown-body section.rb-file > h2 {
   position: sticky; top: 0; z-index: 2;
   margin: 0 -1.2em 1em; padding: 0.55em 1.2em; font-size: 1.15em;

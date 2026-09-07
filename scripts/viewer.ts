@@ -12,6 +12,8 @@
 //                     the body still starts with review-brief front matter, so a
 //                     stray save cannot destroy the cache
 //   GET  /brief/meta  { path, mtime, viewer } — lets the editor detect changes on disk, and a viewer rebuild
+//   GET  /events      server-sent events: `meta` (same JSON) on connect and whenever the brief file, the
+//                     served brief (/switch) or the viewer build changes — open tabs never poll
 //   GET  /file?path=P { name, path, content, rev, symbols } — a repo file as the brief sees it (symbols:
 //                     the same units extract would find, for the editor's outline):
 //                     at the briefed commit in commit mode, else the working tree
@@ -59,6 +61,36 @@ function viewerBuild(): string | null {
   try { return fs.readFileSync(path.join(VIEWER, "sw.js"), "utf8").match(/VERSION = '([^']+)'/)?.[1] ?? null; } catch { return null; }
 }
 
+// Server-sent events. Every open tab holds one connection; it gets the current meta on connect and
+// again whenever the brief file is rewritten (extract, lint, a fill, a save), /switch changes which
+// brief is served, or sw.js is re-stamped. fs.watch on the directory catches editors that write by rename.
+const clients = new Set<import("node:http").ServerResponse>();
+async function metaJSON(): Promise<string> {
+  const s = await stat(briefPath).catch(() => null);
+  return JSON.stringify({ path: briefPath, name: path.basename(briefPath), mtime: s?.mtimeMs ?? null, viewer: viewerBuild() });
+}
+let broadcastTimer: NodeJS.Timeout | null = null;
+function broadcastMeta(): void {
+  if (broadcastTimer) clearTimeout(broadcastTimer);
+  broadcastTimer = setTimeout(async () => {
+    broadcastTimer = null;
+    if (!clients.size) return;
+    const frame = `event: meta\ndata: ${await metaJSON()}\n\n`;
+    for (const c of clients) c.write(frame);
+  }, 80); // a rewrite is several fs events; one frame per change
+}
+let briefWatcher: fs.FSWatcher | null = null;
+function watchBrief(): void {
+  briefWatcher?.close();
+  const dir = path.dirname(briefPath), name = path.basename(briefPath);
+  try { briefWatcher = fs.watch(dir, (_event, file) => { if (!file || file === name) broadcastMeta(); }); } catch { briefWatcher = null; }
+}
+function startWatchers(): void {
+  watchBrief();
+  try { fs.watch(VIEWER, (_event, file) => { if (file === "sw.js") broadcastMeta(); }); } catch { /* no rebuild detection */ }
+  setInterval(() => { for (const c of clients) c.write(": ping\n\n"); }, 25_000).unref(); // keeps proxies and browsers from dropping idle streams
+}
+
 const SG = findAstGrep(); // null: outlines are empty but files still open
 
 // The outline of one file: the symbols extract's rules find in it, with the same ids extract gives
@@ -93,6 +125,14 @@ const server = createServer(async (req, res) => {
       const s = await stat(briefPath);
       res.writeHead(200, { "Content-Type": types[".json"], "Cache-Control": "no-store" });
       return res.end(JSON.stringify({ path: briefPath, name: path.basename(briefPath), mtime: s.mtimeMs, viewer: viewerBuild() }));
+    }
+    if (url.pathname === "/events" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
+      res.write(`event: meta\ndata: ${await metaJSON()}\n\n`);
+      clients.add(res);
+      req.on("close", () => clients.delete(res));
+      if (verbose) process.stdout.write(`${new Date().toISOString().slice(11, 19)} GET /events → stream open (${clients.size} connected)\n`); // finish never fires for a stream
+      return;
     }
     if (url.pathname === "/file" && req.method === "GET") {
       const rel = url.searchParams.get("path") ?? "";
@@ -129,6 +169,8 @@ const server = createServer(async (req, res) => {
       const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: path.dirname(next), encoding: "utf8" });
       root = typeof body.root === "string" && fs.existsSync(body.root) ? body.root : r.status === 0 ? r.stdout.trim() : root;
       process.stdout.write(`now serving ${briefPath} (repo ${root})\n`);
+      watchBrief();
+      broadcastMeta();
       res.writeHead(200, { "Content-Type": types[".json"] });
       return res.end(JSON.stringify({ ok: true, path: briefPath }));
     }
@@ -182,6 +224,7 @@ async function main() {
 }
 main();
 function onListen() {
+  startWatchers();
   const addr = server.address();
   const p = typeof addr === "object" && addr ? addr.port : port;
   const url = `http://127.0.0.1:${p}/?brief=/brief`;

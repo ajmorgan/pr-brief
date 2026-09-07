@@ -640,6 +640,7 @@ The skill bundles a copy of xor, the editor (`viewer/`, synced from `~/code/web/
 |---|---|
 | `GET /brief` | current file content |
 | `GET /brief/meta` | `{ path, name, mtime, viewer }` — `viewer` is the served app's build id; the editor reloads itself when it changes |
+| `GET /events` | server-sent events: a `meta` frame (same JSON) on connect and whenever the brief file is rewritten, `/switch` changes the served brief, or `sw.js` is re-stamped. Open tabs hold one connection each and never poll; a dropped connection reconnects and gets the current meta again |
 | `PUT /brief` | replaces the file; refused (422) unless the body starts with `review-brief:` front matter |
 | `GET /file?path=` | a repository file as the brief sees it (the commit in commit mode, else the working tree, falling back to head then base), with its `symbols` for the outline |
 | `POST /switch` | `{ path, root }` — serve another brief; localhost only |
@@ -657,6 +658,8 @@ The agent rewrites the brief on every extract run; the reviewer edits it in the 
 - **Motions and commands**: `]u` / `[u` next/previous unit (honouring the filter); `:unit <name>` / `:file <path>` (no argument → picker); `:note` puts the cursor on the unit's `**Notes:**` line in insert mode, creating the line after the unit's hunk if absent; `:changed` toggles the filter; `:rel` reloads.
 - **Folded hunks**: every ```` ```diff ```` fence is folded on open in the editor (`zR`/`zM` as usual) and rendered as a collapsed `<details>` in the preview, so prose reads first.
 - **Status**: `unit i/n · k changed`.
+- **Scroll-spy**: in preview view, or in split view while the preview is the pane being scrolled, the outline highlight and the status follow the unit under the sticky file heading. Each unit renders in a `div.rb-unit` wrapper and each file in `section.rb-file`; both carry `data-spy-line` and tile the document, so an IntersectionObserver over a 2px band under the sticky heading knows exactly which one is being read without measuring on scroll. When the editor is the pane being scrolled, the cursor drives the outline as before.
+- **Long briefs**: file cards use `content-visibility: auto` with a per-card size estimate (≈57px per block, hunks folded), so a 300-unit brief lays out only the cards near the viewport. Geometry inside a skipped card is not available: the preview uses the card's top for such blocks when mapping scroll positions, and forces a card visible for one frame before jumping into it (outline click, scroll sync, anchor link).
 - **Sidebar**: the Open list (documents in the editor, × closes copies without confirmation, ⊗ closes the other opened files) above the Outline — the brief's files and units, or a source file's symbols with a `brief` badge on those that are units in the brief (§6.5b).
 - **Preview**: front matter hidden; the summary block's folds; each file a card with a sticky heading and a status pill; hunks colourised in the file's language, unified or side by side (`:set diff=split`); every path a link that opens the file read-only at the briefed version in a new tab or in place (browser back restores the reader's position).
 

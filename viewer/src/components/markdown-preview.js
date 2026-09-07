@@ -1,6 +1,7 @@
 // <markdown-preview>: renders markdown and reports scroll position in
 // source-line terms so the editor and preview can stay aligned.
-// Emits: preview-scroll {line, fraction}.
+// Emits: preview-scroll {line, fraction}; preview-section {line} when the unit or file card under
+// the top of the viewport changes (scroll-spy for the outline).
 
 import { renderMarkdown } from '../lib/markdown.js';
 
@@ -8,6 +9,11 @@ export class MarkdownPreview extends HTMLElement {
   #article;
   #blocks = [];
   #raf = 0;
+  #spy = null;          // IntersectionObserver over [data-spy-line] elements
+  #spyOn = new Set();   // the ones currently crossing the band under the sticky heading
+  #spyActive = null;
+  #spyBand = '';        // offset:height the observer was built for; a width-only resize keeps it
+  #resize = null;
 
   connectedCallback() {
     if (this.#article) return;
@@ -19,6 +25,8 @@ export class MarkdownPreview extends HTMLElement {
       this.#raf = requestAnimationFrame(() => this.#emitScroll());
     }, { passive: true });
     this.addEventListener('click', (e) => this.#handleClick(e));
+    this.#resize = new ResizeObserver(() => this.#observeSpy({ force: false })); // the band is sized from the viewport
+    this.#resize.observe(this);
   }
 
   render(markdown) {
@@ -27,6 +35,7 @@ export class MarkdownPreview extends HTMLElement {
     this.#article.replaceChildren(fragment);
     this.#restoreFolds(open);
     this.#collectBlocks();
+    this.#observeSpy();
   }
 
   // Re-rendering replaces the DOM, which would close every <details> the reader opened.
@@ -59,13 +68,16 @@ export class MarkdownPreview extends HTMLElement {
   clear() {
     this.#article.replaceChildren();
     this.#blocks = [];
+    this.#spy?.disconnect();
+    this.#spyOn.clear();
+    this.#spyActive = null;
   }
 
   get html() { return this.#article.innerHTML; }
 
   #collectBlocks() {
     this.#blocks = [...this.#article.querySelectorAll('[data-line]')]
-      .map((el) => ({ el, line: Number(el.dataset.line) }))
+      .map((el) => ({ el, line: Number(el.dataset.line), card: el.closest('section.rb-file') }))
       .filter((b) => Number.isFinite(b.line));
   }
 
@@ -75,7 +87,8 @@ export class MarkdownPreview extends HTMLElement {
     if (a) {
       e.preventDefault();
       const id = decodeURIComponent(a.getAttribute('href').slice(1));
-      this.#article.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const target = this.#article.querySelector(`[id="${CSS.escape(id)}"]`);
+      if (target) this.#withLayout(target, () => target.scrollIntoView({ behavior: 'smooth', block: 'start' }));
       return;
     }
     // Double-click a block to jump the editor to its source line.
@@ -85,9 +98,64 @@ export class MarkdownPreview extends HTMLElement {
     }
   }
 
-  /** Offset of a block relative to the scroll container's content. */
+  /** Offset of a block relative to the scroll container's content. A block inside a card the
+   *  browser has skipped (content-visibility: auto) has no layout: its card's top stands in. */
   #top(el) {
+    const card = el.closest('section.rb-file');
+    return card && card !== el && !this.#rendered(card) ? this.#topOf(card) : this.#topOf(el);
+  }
+
+  #topOf(el) {
     return el.getBoundingClientRect().top - this.#article.getBoundingClientRect().top;
+  }
+
+  /** Whether a card's contents are laid out right now (false while content-visibility skips them). */
+  #rendered(card) {
+    const probe = card.firstElementChild;
+    return !probe || typeof probe.checkVisibility !== 'function' || probe.checkVisibility({ contentVisibilityAuto: true });
+  }
+
+  /** Run fn with el laid out: a card the browser skipped (content-visibility: auto) is forced visible for
+   *  the call, since scrollIntoView and geometry reads on skipped content do not lay it out first. */
+  #withLayout(el, fn) {
+    const card = el.closest('section.rb-file');
+    const force = card && card !== el && !this.#rendered(card) ? card : null;
+    if (force) force.style.contentVisibility = 'visible';
+    fn();
+    if (force) requestAnimationFrame(() => { force.style.contentVisibility = ''; });
+  }
+
+  /** Height of the sticky file heading, which covers the top of the viewport inside a card.
+   *  Measured on a heading that is laid out: one in a skipped card reports 0. */
+  #stickyOffset() {
+    for (const h2 of this.#article.querySelectorAll('section.rb-file > h2')) if (h2.offsetHeight) return h2.offsetHeight;
+    return 0;
+  }
+
+  // Scroll-spy. Units and file cards carry data-spy-line and tile the document, so the one crossing
+  // a thin band just under the sticky heading is the one being read. IntersectionObserver reports
+  // only the elements whose state changed, so the set of what is in the band stays exact at any
+  // scroll speed, and nothing is measured on scroll.
+  #observeSpy({ force = true } = {}) {
+    const targets = this.#article.querySelectorAll('[data-spy-line]');
+    const offset = this.#stickyOffset();
+    const band = `${offset}:${this.clientHeight}`;
+    if (!force && this.#spy && band === this.#spyBand) return;
+    this.#spy?.disconnect();
+    this.#spyOn.clear();
+    this.#spyActive = null;
+    this.#spyBand = band;
+    if (!targets.length || !this.clientHeight) return;
+    const below = Math.max(0, this.clientHeight - offset - 2);
+    this.#spy = new IntersectionObserver((entries) => {
+      for (const e of entries) { if (e.isIntersecting) this.#spyOn.add(e.target); else this.#spyOn.delete(e.target); }
+      let best = null; // innermost: a unit over the card that contains it
+      for (const el of this.#spyOn) if (!best || (el.classList.contains('rb-unit') && !best.classList.contains('rb-unit'))) best = el;
+      if (!best || best === this.#spyActive) return;
+      this.#spyActive = best;
+      this.dispatchEvent(new CustomEvent('preview-section', { detail: { line: Number(best.dataset.spyLine) } }));
+    }, { root: this, rootMargin: `-${offset}px 0px -${below}px 0px`, threshold: 0 });
+    for (const el of targets) this.#spy.observe(el);
   }
 
   #emitScroll() {
@@ -102,7 +170,13 @@ export class MarkdownPreview extends HTMLElement {
   lineAtScrollTop(scrollTop) {
     const blocks = this.#blocks;
     if (!blocks.length) return { line: 1, fraction: 0 };
-    const tops = blocks.map((b) => this.#top(b.el));
+    const cards = new Map(); // per card, once per call: laid out? and its top
+    const tops = blocks.map((b) => {
+      if (!b.card) return this.#topOf(b.el);
+      let c = cards.get(b.card);
+      if (!c) { c = { rendered: this.#rendered(b.card), top: this.#topOf(b.card) }; cards.set(b.card, c); }
+      return c.rendered ? this.#topOf(b.el) : c.top;
+    });
     let i = 0;
     while (i + 1 < blocks.length && tops[i + 1] <= scrollTop) i++;
     const cur = blocks[i];
@@ -124,20 +198,23 @@ export class MarkdownPreview extends HTMLElement {
     while (i + 1 < blocks.length && blocks[i + 1].line <= line) i++;
     const cur = blocks[i];
     const next = blocks[i + 1];
-    const curTop = this.#top(cur.el);
-    let target;
-    // inside a file card the heading is sticky: leave room for it so the block is not hidden under it
-    const sticky = cur.el.closest('section.rb-file')?.querySelector(':scope > h2');
-    const offset = sticky && sticky !== cur.el ? sticky.offsetHeight : 0;
-    if (line < cur.line) {
-      target = 0;
-    } else if (next) {
-      const ratio = (line + fraction - cur.line) / Math.max(1, next.line - cur.line);
-      target = curTop + Math.min(1, ratio) * (this.#top(next.el) - curTop);
-    } else {
-      target = curTop + fraction * cur.el.offsetHeight;
-    }
-    this.scrollTop = target - offset;
+    // the target may sit in a card the browser has skipped (content-visibility: auto): measure it laid out
+    this.#withLayout(cur.el, () => {
+      const curTop = this.#top(cur.el);
+      let target;
+      // inside a file card the heading is sticky: leave room for it so the block is not hidden under it
+      const sticky = cur.card?.querySelector(':scope > h2');
+      const offset = sticky && sticky !== cur.el ? sticky.offsetHeight : 0;
+      if (line < cur.line) {
+        target = 0;
+      } else if (next) {
+        const ratio = (line + fraction - cur.line) / Math.max(1, next.line - cur.line);
+        target = curTop + Math.min(1, ratio) * (this.#top(next.el) - curTop);
+      } else {
+        target = curTop + fraction * cur.el.offsetHeight;
+      }
+      this.scrollTop = target - offset;
+    });
   }
 
   scrollToBottom() { this.scrollTop = this.scrollHeight; }

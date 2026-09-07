@@ -133,6 +133,7 @@ export function renderMarkdown(src) {
   const fragment = document.createDocumentFragment();
   briefLang = null;
   let section = null; // brief mode: the <section class="rb-file"> of the file being rendered
+  let unit = null; // brief mode: the <div class="rb-unit"> of the unit being rendered
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     const lines = countLines(token.raw);
@@ -146,6 +147,14 @@ export function renderMarkdown(src) {
       section = document.createElement('section');
       section.className = 'rb-file';
       fragment.append(section);
+      unit = null;
+    }
+    if (briefRendering && token.type === 'heading' && token.depth === 3 && section) {
+      // one wrapper per unit: the scroll-spy target, and it makes units tile the card
+      unit = document.createElement('div');
+      unit.className = 'rb-unit';
+      unit.dataset.spyLine = String(line);
+      section.append(unit);
     }
     if (briefRendering && token.type === 'heading') {
       // `## `path` — …` and `### `sig` — … · `path:lines`` name the file; keep its grammar for the hunks that follow
@@ -159,9 +168,16 @@ export function renderMarkdown(src) {
       template.innerHTML = DOMPurify.sanitize(html, purifyConfig);
       const first = template.content.firstElementChild;
       if (first) first.dataset.line = String(line);
-      (section ?? fragment).append(template.content);
+      (unit ?? section ?? fragment).append(template.content);
     }
     line += lines;
+  }
+  // file cards: the header area is a scroll-spy target too, and a card the browser skips
+  // (content-visibility: auto) needs a height estimate until it is first drawn
+  for (const sec of fragment.querySelectorAll('section.rb-file')) {
+    const h2 = sec.querySelector(':scope > h2');
+    if (h2?.dataset.line) sec.dataset.spyLine = h2.dataset.line;
+    sec.style.containIntrinsicSize = `auto ${60 + sec.querySelectorAll('[data-line]').length * 57}px`; // ≈ measured: 57px per block with hunks folded
   }
   // file heading: the status after the dash becomes a pill (added / modified / deleted / renamed from …)
   for (const h2 of fragment.querySelectorAll('section.rb-file > h2')) {

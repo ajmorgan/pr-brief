@@ -118,10 +118,29 @@ async function refreshList() {
   els.files.activeId = active?.id ?? null;
 }
 
+// Where each open document was last left (cursor line, preview scroll), so switching documents in the
+// Open list — or closing one and landing on another — returns to that place instead of the top.
+const positions = new Map();
+function currentPosition() {
+  // the preview's place is kept as a source line, not an offset: after a re-render the offsets of
+  // cards the browser skips are estimates, while scrollToLine lays the target out and lands exactly
+  const p = els.preview.lineAtScrollTop(els.preview.scrollTop);
+  return { line: els.editor.cursorLine, previewLine: p.line, previewFraction: p.fraction || 0 };
+}
+function rememberPosition() {
+  if (active) positions.set(active.id, currentPosition());
+}
+function applyPosition(pos) {
+  if (!pos) return;
+  if (pos.line > 1) { els.editor.revealLine(pos.line); els.editor.gotoLine(pos.line); }
+  if (pos.previewLine > 1) requestAnimationFrame(() => els.preview.scrollToLine(pos.previewLine, pos.previewFraction));
+}
+
 async function openDocument(id) {
   const doc = docs.find((d) => d.id === id) ?? await store.getDocument(id);
   if (!doc) return false;
   autosave.flush();
+  rememberPosition();
   active = doc;
   diskDirty = false;
   els.editor.openDocument(doc.id, doc.content, doc.name);
@@ -137,6 +156,8 @@ async function openDocument(id) {
   updateSavedStatus();
   updateStats(doc.content);
   renderPreview.flush();
+  // this page's memory first; else the place saved when a page left this brief for a file link
+  applyPosition(positions.get(doc.id) ?? (doc.remote ? takeStoredPosition(doc.remote) : null));
   els.editor.focus();
   return true;
 }
@@ -166,6 +187,7 @@ async function deleteDocument(id) {
   if (!doc) return;
   await store.deleteDocument(id);
   els.editor.forgetDocument(id);
+  positions.delete(id);
   await refreshList();
   els.toast.show(`Deleted ${doc.name}`, {
     action: 'Undo',
@@ -185,6 +207,7 @@ async function closeDocumentById(id) {
   if (active?.id === id) autosave.flush();
   await store.deleteDocument(id);
   els.editor.forgetDocument(id);
+  positions.delete(id);
   await refreshList();
   if (active?.id === id) {
     active = null;
@@ -322,43 +345,56 @@ async function reload({ quiet = false } = {}) {
 
 // --- Watch linked files: pick up regenerations (an agent rewriting a brief)
 // without a manual reload. Unsaved edits are never overwritten: then it only
-// offers a reload, once per change.
+// offers a reload, once per change. A brief served by the viewer is pushed to
+// over server-sent events; a local file handle still has to be polled.
 let watchTimer = null;
+let watchSource = null;
 let watchNotifiedFor = null;
 let viewerBuild = null; // the served app's build id when this page loaded; a change means the viewer was rebuilt
 function startWatch() {
   clearInterval(watchTimer);
   watchTimer = null;
+  watchSource?.close();
+  watchSource = null;
   if (!active || !(active.handle || active.remote) || active.mtime == null) return;
-  watchTimer = setInterval(async () => {
-    if (document.hidden) return;
-    try {
-      if (active.remote) {
-        // the viewer's own code was rebuilt (sync-viewer.sh): this page is stale, reload it
-        const meta = await files.remoteMeta(active.remote);
-        if (meta.viewer) {
-          if (viewerBuild === null) viewerBuild = meta.viewer;
-          else if (meta.viewer !== viewerBuild) {
-            if (!diskDirty) { location.reload(); return; }
-            if (watchNotifiedFor !== 'viewer') {
-              watchNotifiedFor = 'viewer';
-              els.toast.show('The viewer was updated. Save (:w) or reload to pick it up.', { duration: 10000, action: 'Reload', onAction: () => location.reload() });
-            }
-            return;
+  if (active.remote && 'EventSource' in window) {
+    // the server sends the current meta on connect and after every change; a dropped connection
+    // reconnects by itself and gets the current meta again, so nothing is missed
+    watchSource = new EventSource(new URL('/events', active.remote));
+    watchSource.addEventListener('meta', (e) => { try { onWatchMeta(JSON.parse(e.data)); } catch { /* malformed frame */ } });
+    return;
+  }
+  watchTimer = setInterval(() => { if (!document.hidden) onWatchMeta(null); }, 2000);
+}
+
+async function onWatchMeta(meta) {
+  if (!active) return;
+  try {
+    if (active.remote) {
+      meta ??= await files.remoteMeta(active.remote);
+      // the viewer's own code was rebuilt (build.mjs --stamp, sync-viewer.sh): this page is stale, reload it
+      if (meta.viewer) {
+        if (viewerBuild === null) viewerBuild = meta.viewer;
+        else if (meta.viewer !== viewerBuild) {
+          if (!diskDirty) { location.reload(); return; }
+          if (watchNotifiedFor !== 'viewer') {
+            watchNotifiedFor = 'viewer';
+            els.toast.show('The viewer was updated. Save (:w) or reload to pick it up.', { duration: 10000, action: 'Reload', onAction: () => location.reload() });
           }
+          return;
         }
       }
-      if (!(await changedOnDisk())) return;
-      if (diskDirty) {
-        const now = active.remote ? await files.remoteMtime(active.remote) : (await active.handle.getFile()).lastModified;
-        if (watchNotifiedFor === now) return;
-        watchNotifiedFor = now;
-        els.toast.show(`${active.name} changed on disk. Your unsaved edits are kept; reload to see the new version.`, { duration: 8000, action: 'Reload', onAction: reload });
-        return;
-      }
-      await reload({ quiet: true });
-    } catch { /* server gone or permission lost: try again next tick */ }
-  }, 2000);
+      if (typeof meta.mtime !== 'number' || Math.abs(meta.mtime - active.mtime) <= 1) return; // filesystems round mtimes
+    } else if (!(await changedOnDisk())) return;
+    if (diskDirty) {
+      const now = active.remote ? meta.mtime : (await active.handle.getFile()).lastModified;
+      if (watchNotifiedFor === now) return;
+      watchNotifiedFor = now;
+      els.toast.show(`${active.name} changed on disk. Your unsaved edits are kept; reload to see the new version.`, { duration: 8000, action: 'Reload', onAction: reload });
+      return;
+    }
+    await reload({ quiet: true });
+  } catch { /* server gone or permission lost: the next event or tick tries again */ }
 }
 
 async function saveAs() {
@@ -494,6 +530,14 @@ els.preview.addEventListener('preview-scroll', (e) => {
   if (!settings.scrollSync || activePane !== 'preview' || effectiveView() !== 'split') return;
   if (e.detail.atBottom) els.editor.scrollToBottom();
   else els.editor.scrollToLine(e.detail.line, e.detail.fraction);
+});
+
+els.preview.addEventListener('preview-section', (e) => {
+  // the outline follows what is being read: the preview when it is the only pane, or when it is the pane being scrolled
+  if (!outline || !brief) return;
+  if (effectiveView() === 'editor' || (effectiveView() === 'split' && activePane !== 'preview')) return;
+  els.outline.line = e.detail.line;
+  updateBriefStatus(e.detail.line);
 });
 
 els.preview.addEventListener('goto-line', (e) => {
@@ -667,14 +711,13 @@ els.outline.addEventListener('open-brief', (e) => {
 const posKey = (url) => `rb:pos:${url}`;
 addEventListener('pagehide', () => {
   if (!active?.remote) return;
-  try { sessionStorage.setItem(posKey(active.remote), JSON.stringify({ line: els.editor.cursorLine, scroll: els.preview.scrollTop })); } catch { /* storage unavailable */ }
+  try { sessionStorage.setItem(posKey(active.remote), JSON.stringify(currentPosition())); } catch { /* storage unavailable */ }
 });
+function takeStoredPosition(url) {
+  try { const pos = JSON.parse(sessionStorage.getItem(posKey(url)) ?? 'null'); sessionStorage.removeItem(posKey(url)); return pos; } catch { return null; }
+}
 function restorePosition(url) {
-  let pos = null;
-  try { pos = JSON.parse(sessionStorage.getItem(posKey(url)) ?? 'null'); sessionStorage.removeItem(posKey(url)); } catch { return; }
-  if (!pos) return;
-  if (pos.line > 1) gotoBriefLine(pos.line);
-  if (pos.scroll) requestAnimationFrame(() => { els.preview.scrollTop = pos.scroll; });
+  applyPosition(takeStoredPosition(url));
 }
 
 /** ?brief=<url>: open (or refresh) the document served by a local review-brief viewer. */
