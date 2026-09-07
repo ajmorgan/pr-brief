@@ -1,0 +1,40 @@
+# Python units. A function nested inside another function's body is part of that function.
+id: py-function
+language: Python
+rule:
+  kind: function_definition
+  all:
+    - has: { field: name, pattern: $NAME }
+    - not: { inside: { kind: function_definition, stopBy: end } }
+    - not: { inside: { kind: decorated_definition } } # matched with its decorators below
+---
+# a decorated function: the decorators belong to it, so the unit starts at the first @
+id: py-function.decorated
+language: Python
+rule:
+  kind: decorated_definition
+  all:
+    - has: { kind: function_definition, has: { field: name, pattern: $NAME } }
+    - not: { inside: { kind: function_definition, stopBy: end } }
+---
+id: py-class
+language: Python
+rule:
+  kind: class_definition
+  all:
+    - has: { field: name, pattern: $NAME }
+    - not: { inside: { kind: decorated_definition } }
+---
+id: py-class.decorated
+language: Python
+rule:
+  kind: decorated_definition
+  has: { kind: class_definition, has: { field: name, pattern: $NAME } }
+---
+# module-level assignment: a constant, a table, a compiled regex
+id: py-const
+language: Python
+rule:
+  kind: assignment
+  inside: { kind: expression_statement, inside: { kind: module } }
+  has: { field: left, kind: identifier, pattern: $NAME }

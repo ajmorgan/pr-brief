@@ -1,0 +1,51 @@
+# Kotlin units (.kt and .kts). The fwcd grammar has few named fields, so names are the first
+# identifier child. A function declared inside another function's body is part of that function.
+id: kt-function
+language: Kotlin
+rule:
+  kind: function_declaration
+  all:
+    - has: { kind: simple_identifier, pattern: $NAME }
+    - not: { inside: { kind: function_body, stopBy: end } }
+---
+id: kt-class
+language: Kotlin
+rule:
+  kind: class_declaration
+  has: { kind: type_identifier, pattern: $NAME }
+---
+id: kt-object
+language: Kotlin
+rule:
+  kind: object_declaration
+  has: { kind: type_identifier, pattern: $NAME }
+---
+id: kt-object.companion
+language: Kotlin
+rule:
+  kind: companion_object
+---
+id: kt-constructor
+language: Kotlin
+rule:
+  kind: secondary_constructor
+---
+# a property at file or class level (not a local variable)
+id: kt-field
+language: Kotlin
+rule:
+  kind: property_declaration
+  all:
+    - has: { kind: variable_declaration, has: { kind: simple_identifier, pattern: $NAME } }
+    - not: { inside: { kind: function_body, stopBy: end } }
+    - not: { inside: { kind: lambda_literal, stopBy: end } }
+---
+# a top-level configuration block in a .kts script: plugins { … }, dependencies { … }, tasks.named("x") { … }
+id: kt-block
+language: Kotlin
+rule:
+  kind: call_expression
+  all:
+    - inside: { kind: source_file }
+    - has: { kind: simple_identifier, pattern: $NAME }
+    - has: { kind: call_suffix, has: { kind: annotated_lambda } }

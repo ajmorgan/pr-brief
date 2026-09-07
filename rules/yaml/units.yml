@@ -1,0 +1,48 @@
+# YAML units: a document that carries a top-level id or name (an ast-grep rule, a workflow) is one
+# unit; otherwise mapping entries one and two levels deep (spring: and spring.ldap:), and sequence
+# items that carry a name or id (a workflow step, a container).
+id: yaml-doc
+language: Yaml
+rule:
+  kind: document
+  has:
+    kind: block_node
+    has:
+      kind: block_mapping
+      has:
+        kind: block_mapping_pair
+        all:
+          - has: { field: key, regex: '^(id|name)$' }
+          - has: { field: value, pattern: $NAME }
+---
+id: yaml-key
+language: Yaml
+rule:
+  kind: block_mapping_pair
+  all:
+    - has: { field: key, pattern: $NAME }
+    - not: # inside a named document the document is the unit
+        inside:
+          kind: document
+          stopBy: end
+          has: { kind: block_node, has: { kind: block_mapping, has: { kind: block_mapping_pair, has: { field: key, regex: '^(id|name)$' } } } }
+    - not: # deeper than two levels of mapping
+        inside:
+          kind: block_mapping_pair
+          stopBy: end
+          inside: { kind: block_mapping_pair, stopBy: end }
+    - not: { inside: { kind: block_sequence_item, stopBy: end } } # keys inside a list item belong to the item
+---
+id: yaml-item
+language: Yaml
+rule:
+  kind: block_sequence_item
+  has:
+    kind: block_node
+    has:
+      kind: block_mapping
+      has:
+        kind: block_mapping_pair
+        all:
+          - has: { field: key, regex: '^(name|id)$' }
+          - has: { field: value, pattern: $NAME }

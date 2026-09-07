@@ -1,0 +1,14 @@
+# CSS units: each rule set, named by its selector list; @media / @supports / @keyframes blocks contain theirs.
+id: css-rule
+language: Css
+rule:
+  kind: rule_set
+  has: { kind: selectors, pattern: $NAME }
+---
+id: css-rule.at
+language: Css
+rule:
+  any:
+    - kind: media_statement
+    - kind: supports_statement
+    - kind: keyframes_statement

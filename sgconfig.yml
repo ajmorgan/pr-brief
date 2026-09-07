@@ -1,0 +1,13 @@
+ruleDirs:
+  - rules/typescript
+  - rules/javascript
+  - rules/java
+  - rules/python
+  - rules/kotlin
+  - rules/go
+  - rules/lua
+  - rules/bash
+  - rules/html
+  - rules/css
+  - rules/yaml
+  - rules/markdown

@@ -1,0 +1,37 @@
+{
+  "name": "xor",
+  "version": "1.0.0",
+  "description": "xor: offline-first Markdown and code editor PWA with a review-brief mode, vim mode, color schemes and live preview.",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "dev": "node dev.mjs"
+  },
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@codemirror/lang-cpp": "6.0.3",
+    "@codemirror/lang-css": "6.3.1",
+    "@codemirror/lang-go": "6.0.1",
+    "@codemirror/lang-html": "6.4.12",
+    "@codemirror/lang-java": "6.0.2",
+    "@codemirror/lang-javascript": "6.2.5",
+    "@codemirror/lang-json": "6.0.2",
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/lang-python": "6.2.1",
+    "@codemirror/lang-rust": "6.0.2",
+    "@codemirror/lang-sql": "6.10.0",
+    "@codemirror/lang-xml": "6.1.0",
+    "@codemirror/lang-yaml": "6.1.3",
+    "@codemirror/legacy-modes": "6.5.4",
+    "@lezer/highlight": "1.2.3",
+    "@replit/codemirror-vim": "6.4.0",
+    "codemirror": "6.0.2",
+    "dompurify": "3.4.14",
+    "marked": "18.0.11"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

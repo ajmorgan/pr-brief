@@ -1,0 +1,23 @@
+# HTML units: elements that carry an id, plus script and style blocks. Everything else is too
+# fine-grained to name (every div would be a unit) and lands in the enclosing id element or the file.
+id: html-element
+language: Html
+rule:
+  kind: element
+  has:
+    kind: start_tag
+    has:
+      kind: attribute
+      all:
+        - has: { kind: attribute_name, regex: '^id$' }
+        - has: { kind: quoted_attribute_value, has: { kind: attribute_value, pattern: $NAME } }
+---
+id: html-script
+language: Html
+rule:
+  kind: script_element
+---
+id: html-style
+language: Html
+rule:
+  kind: style_element

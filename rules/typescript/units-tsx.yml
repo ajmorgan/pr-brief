@@ -1,0 +1,134 @@
+id: tsx-function
+language: Tsx
+rule:
+  all:
+    - any:
+        - kind: function_declaration
+        - kind: generator_function_declaration
+        - kind: function_signature # overload or `declare` signature
+    - has:
+        field: name
+        pattern: $NAME
+    - not: # declared inside another function's body: part of that function, not a unit of its own
+        inside:
+          kind: statement_block
+          stopBy: end
+---
+id: tsx-method
+language: Tsx
+rule:
+  any:
+    - kind: method_definition
+    - kind: method_signature
+    - kind: abstract_method_signature
+  has:
+    field: name
+    pattern: $NAME
+---
+id: tsx-arrow
+language: Tsx
+rule:
+  any:
+    - kind: variable_declarator
+    - kind: public_field_definition
+  all:
+    - has:
+        field: name
+        pattern: $NAME
+    - has:
+        field: value
+        any:
+          - kind: arrow_function
+          - kind: function_expression
+    - not: # declared inside another function's body: part of that function, not a unit of its own
+        inside:
+          kind: statement_block
+          stopBy: end
+---
+id: tsx-class
+language: Tsx
+rule:
+  any:
+    - kind: class_declaration
+    - kind: abstract_class_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: tsx-interface
+language: Tsx
+rule:
+  kind: interface_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: tsx-type
+language: Tsx
+rule:
+  kind: type_alias_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: tsx-enum
+language: Tsx
+rule:
+  kind: enum_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+# top-level const initialised by anything but a function (e.g. a transform built by a factory call,
+# an object of handlers): its lines, including nested callbacks, belong to it
+id: tsx-const
+language: Tsx
+rule:
+  kind: variable_declarator
+  inside:
+    kind: lexical_declaration
+    inside:
+      any:
+        - kind: program
+        - kind: export_statement
+  all:
+    - has:
+        field: name
+        pattern: $NAME
+    - not:
+        has:
+          field: value
+          any:
+            - kind: arrow_function
+            - kind: function_expression
+---
+# test / describe / it / suite / bench blocks: the string title names the unit
+id: tsx-test
+language: Tsx
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        any:
+          - regex: '^(test|it|describe|suite|bench)$'
+            kind: identifier
+          - kind: member_expression
+            has:
+              field: object
+              regex: '^(test|it|describe|suite|bench)$'
+          - kind: call_expression
+            has:
+              field: function
+              kind: member_expression
+              has:
+                field: object
+                regex: '^(test|it|describe|suite|bench)$'
+    - has:
+        field: arguments
+        has:
+          nthChild: 1
+          any:
+            - kind: string
+            - kind: template_string
+          pattern: $NAME

@@ -1,0 +1,134 @@
+id: ts-function
+language: TypeScript
+rule:
+  all:
+    - any:
+        - kind: function_declaration
+        - kind: generator_function_declaration
+        - kind: function_signature # overload or `declare` signature
+    - has:
+        field: name
+        pattern: $NAME
+    - not: # declared inside another function's body: part of that function, not a unit of its own
+        inside:
+          kind: statement_block
+          stopBy: end
+---
+id: ts-method
+language: TypeScript
+rule:
+  any:
+    - kind: method_definition
+    - kind: method_signature
+    - kind: abstract_method_signature
+  has:
+    field: name
+    pattern: $NAME
+---
+id: ts-arrow
+language: TypeScript
+rule:
+  any:
+    - kind: variable_declarator
+    - kind: public_field_definition
+  all:
+    - has:
+        field: name
+        pattern: $NAME
+    - has:
+        field: value
+        any:
+          - kind: arrow_function
+          - kind: function_expression
+    - not: # declared inside another function's body: part of that function, not a unit of its own
+        inside:
+          kind: statement_block
+          stopBy: end
+---
+id: ts-class
+language: TypeScript
+rule:
+  any:
+    - kind: class_declaration
+    - kind: abstract_class_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: ts-interface
+language: TypeScript
+rule:
+  kind: interface_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: ts-type
+language: TypeScript
+rule:
+  kind: type_alias_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: ts-enum
+language: TypeScript
+rule:
+  kind: enum_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+# top-level const initialised by anything but a function (e.g. a transform built by a factory call,
+# an object of handlers): its lines, including nested callbacks, belong to it
+id: ts-const
+language: TypeScript
+rule:
+  kind: variable_declarator
+  inside:
+    kind: lexical_declaration
+    inside:
+      any:
+        - kind: program
+        - kind: export_statement
+  all:
+    - has:
+        field: name
+        pattern: $NAME
+    - not:
+        has:
+          field: value
+          any:
+            - kind: arrow_function
+            - kind: function_expression
+---
+# test / describe / it / suite / bench blocks: the string title names the unit
+id: ts-test
+language: TypeScript
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        any:
+          - regex: '^(test|it|describe|suite|bench)$'
+            kind: identifier
+          - kind: member_expression
+            has:
+              field: object
+              regex: '^(test|it|describe|suite|bench)$'
+          - kind: call_expression
+            has:
+              field: function
+              kind: member_expression
+              has:
+                field: object
+                regex: '^(test|it|describe|suite|bench)$'
+    - has:
+        field: arguments
+        has:
+          nthChild: 1
+          any:
+            - kind: string
+            - kind: template_string
+          pattern: $NAME

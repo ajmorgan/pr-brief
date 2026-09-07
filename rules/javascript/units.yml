@@ -1,0 +1,104 @@
+id: js-function
+language: JavaScript
+rule:
+  all:
+    - any:
+        - kind: function_declaration
+        - kind: generator_function_declaration
+    - has:
+        field: name
+        pattern: $NAME
+    - not: # declared inside another function's body: part of that function, not a unit of its own
+        inside:
+          kind: statement_block
+          stopBy: end
+---
+id: js-method
+language: JavaScript
+rule:
+  kind: method_definition
+  has:
+    field: name
+    pattern: $NAME
+---
+id: js-arrow
+language: JavaScript
+rule:
+  any:
+    - kind: variable_declarator
+    - kind: field_definition
+  all:
+    - has:
+        field: name
+        pattern: $NAME
+    - has:
+        field: value
+        any:
+          - kind: arrow_function
+          - kind: function_expression
+    - not: # declared inside another function's body: part of that function, not a unit of its own
+        inside:
+          kind: statement_block
+          stopBy: end
+---
+id: js-class
+language: JavaScript
+rule:
+  kind: class_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+# top-level const initialised by anything but a function (e.g. a transform built by a factory call,
+# an object of handlers): its lines, including nested callbacks, belong to it
+id: js-const
+language: JavaScript
+rule:
+  kind: variable_declarator
+  inside:
+    kind: lexical_declaration
+    inside:
+      any:
+        - kind: program
+        - kind: export_statement
+  all:
+    - has:
+        field: name
+        pattern: $NAME
+    - not:
+        has:
+          field: value
+          any:
+            - kind: arrow_function
+            - kind: function_expression
+---
+# test / describe / it / suite / bench blocks: the string title names the unit
+id: js-test
+language: JavaScript
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        any:
+          - regex: '^(test|it|describe|suite|bench)$'
+            kind: identifier
+          - kind: member_expression
+            has:
+              field: object
+              regex: '^(test|it|describe|suite|bench)$'
+          - kind: call_expression
+            has:
+              field: function
+              kind: member_expression
+              has:
+                field: object
+                regex: '^(test|it|describe|suite|bench)$'
+    - has:
+        field: arguments
+        has:
+          nthChild: 1
+          any:
+            - kind: string
+            - kind: template_string
+          pattern: $NAME

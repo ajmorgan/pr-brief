@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>xor</title>
+  <meta name="description" content="An offline-first Markdown and code editor with vim mode, color schemes and live preview.">
+  <meta name="theme-color" content="#21252b">
+  <meta name="color-scheme" content="dark light">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" sizes="any">
+  <link rel="icon" href="icons/icon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Editor">
+  <!-- build.mjs stamps the vendor hash here: a rebuild is a new URL, so no cache can serve a stale bundle -->
+  <script type="importmap">{"imports":{"./vendor/editor.js":"./vendor/editor.js?v=9b64368cdc14"}}</script>
+  <link rel="modulepreload" href="vendor/editor.js?v=9b64368cdc14">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app" id="app" data-view="split">
+    <header class="toolbar">
+      <!-- document -->
+      <button type="button" class="icon-btn" id="btn-sidebar" aria-label="Toggle sidebar" aria-expanded="true" title="Toggle sidebar (⌘B)">☰</button>
+      <input class="doc-name" id="doc-name" aria-label="Document name" spellcheck="false" autocomplete="off">
+      <span class="doc-dirty" id="doc-dirty" hidden title="Unsaved changes">●</span>
+      <div class="doc-actions" id="doc-actions">
+        <button type="button" class="icon-btn" id="btn-new" title="New document (⌘N)" aria-label="New document"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>
+        <button type="button" class="icon-btn" id="btn-open" title="Open from disk (⌘O)" aria-label="Open file"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12z"/></svg></button>
+        <button type="button" class="icon-btn" id="btn-save" title="Save (⌘S)" aria-label="Save"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h8l2.5 2.5v8.5h-11z M5 2.5v3.5h5v-3.5 M5 13v-4h6v4"/></svg></button>
+      </div>
+      <span class="spacer"></span>
+      <!-- view -->
+      <div class="segmented view-switch" role="group" aria-label="View mode">
+        <button type="button" data-view="editor" aria-pressed="false" title="Editor only (⌘E cycles)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11 2.5l2.5 2.5L6 12.5H3.5V10z"/></svg><span class="label">Edit</span></button>
+        <button type="button" data-view="split" aria-pressed="true" title="Editor and preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M8 3v10"/></svg><span class="label">Split</span></button>
+        <button type="button" data-view="preview" aria-pressed="false" title="Preview only"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg><span class="label">Preview</span></button>
+      </div>
+      <div class="segmented diff-switch" id="diff-switch" role="group" aria-label="Diff layout" hidden>
+        <button type="button" data-diff="unified" aria-pressed="true" title="Stacked diffs (:set diff=unified)"><span class="label">Unified</span></button>
+        <button type="button" data-diff="split" aria-pressed="false" title="Side-by-side diffs (:set diff=split)"><span class="label">Side by side</span></button>
+      </div>
+      <span class="spacer"></span>
+      <!-- app -->
+      <button type="button" class="tool-btn palette-pill" id="btn-palette" title="Command palette (⌘K)"><kbd>⌘K</kbd><span class="label">Commands</span></button>
+      <div class="more" id="more">
+        <button type="button" class="icon-btn" id="btn-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" title="More">⋯</button>
+        <div class="more-menu" id="more-menu" role="menu" hidden>
+          <button type="button" role="menuitem" data-menu="theme">Color scheme… <kbd>⌘⇧T</kbd></button>
+          <button type="button" role="menuitemcheckbox" data-menu="vim" aria-checked="true">Vim mode <kbd>⌘⇧V</kbd></button>
+          <button type="button" role="menuitemcheckbox" data-menu="wrap" aria-checked="true">Line wrap</button>
+          <button type="button" role="menuitemcheckbox" data-menu="numbers" aria-checked="true">Line numbers</button>
+          <button type="button" role="menuitemcheckbox" data-menu="sync" aria-checked="true">Scroll sync</button>
+          <button type="button" role="menuitem" data-menu="zen">Zen mode <kbd>⌘⇧Z</kbd></button>
+          <hr>
+          <button type="button" role="menuitem" data-menu="install" id="btn-install" hidden>Install as an app</button>
+          <button type="button" role="menuitem" data-menu="help">Keyboard reference <kbd>⌘?</kbd></button>
+          <button type="button" role="menuitem" data-menu="storage">Storage usage…</button>
+        </div>
+      </div>
+    </header>
+
+    <aside class="sidebar" id="sidebar">
+      <file-list id="files"></file-list>
+      <brief-outline id="outline"></brief-outline>
+    </aside>
+
+    <main class="workspace" id="workspace">
+      <editor-pane id="editor"></editor-pane>
+      <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Resize panes" tabindex="0"></div>
+      <markdown-preview id="preview"></markdown-preview>
+    </main>
+
+    <status-bar id="status"></status-bar>
+  </div>
+
+  <command-palette id="palette"></command-palette>
+  <help-dialog id="help"></help-dialog>
+  <app-toast id="toast"></app-toast>
+
+  <noscript><p style="padding:2rem;font-family:system-ui">xor needs JavaScript to run.</p></noscript>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

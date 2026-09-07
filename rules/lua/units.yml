@@ -1,0 +1,29 @@
+# Lua units: named function declarations (function f, local function f, function M.f) and functions
+# assigned to a name (M.f = function). A function inside another function's body is part of it.
+id: lua-function
+language: Lua
+rule:
+  kind: function_declaration
+  all:
+    - has: { field: name, pattern: $NAME }
+    - not: { inside: { kind: function_declaration, stopBy: end } }
+    - not: { inside: { kind: function_definition, stopBy: end } }
+---
+id: lua-function.assigned
+language: Lua
+rule:
+  kind: assignment_statement
+  all:
+    - has: { kind: variable_list, has: { pattern: $NAME } }
+    - has: { kind: expression_list, has: { kind: function_definition } }
+    - not: { inside: { kind: function_declaration, stopBy: end } }
+    - not: { inside: { kind: function_definition, stopBy: end } }
+---
+# a top-level local: a module table, a constant
+id: lua-const
+language: Lua
+rule:
+  kind: variable_declaration
+  all:
+    - inside: { kind: chunk }
+    - has: { kind: assignment_statement, all: [ { has: { kind: variable_list, has: { pattern: $NAME } } }, { not: { has: { kind: expression_list, has: { kind: function_definition } } } } ] }

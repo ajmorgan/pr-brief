@@ -1,0 +1,30 @@
+id: go-function
+language: Go
+rule:
+  kind: function_declaration
+  has: { field: name, pattern: $NAME }
+---
+# a method: scoped by its receiver type, so Server.Start and Client.Start stay apart
+id: go-method
+language: Go
+rule:
+  kind: method_declaration
+  all:
+    - has: { field: name, pattern: $NAME }
+    - has: { field: receiver, has: { kind: parameter_declaration, has: { field: type, pattern: $SCOPE } } }
+---
+id: go-type
+language: Go
+rule:
+  kind: type_spec
+  has: { field: name, pattern: $NAME }
+---
+id: go-const
+language: Go
+rule:
+  any:
+    - kind: const_spec
+    - kind: var_spec
+  all:
+    - has: { field: name, pattern: $NAME }
+    - not: { inside: { kind: block, stopBy: end } }

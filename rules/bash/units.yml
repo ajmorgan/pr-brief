@@ -1,0 +1,14 @@
+id: sh-function
+language: Bash
+rule:
+  kind: function_definition
+  has: { field: name, pattern: $NAME }
+---
+# a top-level variable: configuration at the head of a script
+id: sh-const
+language: Bash
+rule:
+  kind: variable_assignment
+  all:
+    - inside: { kind: program }
+    - has: { field: name, pattern: $NAME }

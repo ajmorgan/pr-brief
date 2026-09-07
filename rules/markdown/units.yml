@@ -1,0 +1,11 @@
+# Markdown units: sections, named by their heading (the grammar has no identifiers to capture, so
+# the name is taken from the heading line). A section runs to the next heading of the same or a
+# higher level, so subsections nest inside their parent.
+id: md-section
+language: Markdown
+rule:
+  kind: section
+  has:
+    any:
+      - kind: atx_heading
+      - kind: setext_heading

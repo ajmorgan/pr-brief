@@ -1,0 +1,7 @@
+# the skill is self-contained; nothing generated belongs in the repo
+viewer/node_modules/
+.playwright-mcp/
+.DS_Store
+*.log
+# briefs are written into the repo being reviewed, never here
+REVIEW_BRIEF.md

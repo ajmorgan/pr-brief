@@ -1,0 +1,65 @@
+id: java-method
+language: Java
+rule:
+  kind: method_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: java-constructor
+language: Java
+rule:
+  kind: constructor_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: java-class
+language: Java
+rule:
+  kind: class_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: java-interface
+language: Java
+rule:
+  kind: interface_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: java-annotation
+language: Java
+rule:
+  kind: annotation_type_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: java-enum
+language: Java
+rule:
+  kind: enum_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: java-record
+language: Java
+rule:
+  kind: record_declaration
+  has:
+    field: name
+    pattern: $NAME
+---
+id: java-field
+language: Java
+rule:
+  kind: field_declaration
+  has:
+    field: declarator
+    has:
+      field: name
+      pattern: $NAME
