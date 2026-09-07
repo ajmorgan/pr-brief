@@ -415,6 +415,15 @@ export class EditorPane extends HTMLElement {
     this.focus();
   }
 
+  /** Cursor at the end of a line (what vim's A does, for when vim is off). */
+  gotoLineEnd(line) {
+    const doc = this.#view.state.doc;
+    const n = Math.min(Math.max(1, line), doc.lines);
+    const pos = doc.line(n).to;
+    this.#view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
+    this.focus();
+  }
+
   /** Wrap the selection (or insert at cursor) — used by markdown formatting commands. */
   wrapSelection(before, after = before, placeholderText = 'text') {
     const view = this.#view;

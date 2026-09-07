@@ -140,6 +140,7 @@ async function openDocument(id) {
   const doc = docs.find((d) => d.id === id) ?? await store.getDocument(id);
   if (!doc) return false;
   autosave.flush();
+  refreshBrief.cancel(); // a pending refresh holds the outgoing document's text
   rememberPosition();
   active = doc;
   diskDirty = false;
@@ -299,10 +300,12 @@ async function save() {
       const content = els.editor.getValue();
       if (active.remote) {
         active.mtime = await files.putRemote(active.remote, content, active.mtime);
+        active.dirty = false;
       } else {
         const ok = await files.writeToHandle(active.handle, content);
         if (!ok) { els.toast.show('Permission to write the file was denied', { kind: 'error' }); return; }
         active.mtime = (await active.handle.getFile()).lastModified;
+        active.dirty = false;
       }
       await store.putDocument(active);
       diskDirty = false; updateSavedStatus(); els.toast.show(`Saved ${active.name}`);
@@ -329,6 +332,7 @@ async function reload({ quiet = false } = {}) {
     els.editor.setValue(fresh.content);
     active.content = fresh.content;
     active.mtime = fresh.mtime;
+    active.dirty = false;
     active.updatedAt = Date.now();
     const switched = fresh.name && fresh.name !== active.name;
     if (switched) { active.name = fresh.name; els.name.value = fresh.name; document.title = `${fresh.name} · xor`; }
@@ -412,12 +416,14 @@ async function saveAs() {
       active.handle = result.handle;
       active.remote = null;
       active.mtime = (await result.handle.getFile()).lastModified;
+      active.dirty = false;
       active.name = result.name;
       els.name.value = result.name;
       await store.putDocument(active);
       els.editor.setLanguageFromName(result.name);
       await refreshList();
       diskDirty = false;
+      startWatch(); // the file is linked now: watch it like any other
       updateSavedStatus();
       els.toast.show(`Saved to ${result.name}. ${modKey} S now writes to this file.`);
     } else {
@@ -440,11 +446,16 @@ async function importFiles(list) {
       }
     }
     if (existing) {
-      existing.content = f.content;
-      existing.mtime = f.mtime ?? null;
-      existing.updatedAt = Date.now();
-      await store.putDocument(existing);
-      els.editor.forgetDocument(existing.id);
+      if (existing.dirty) {
+        // the browser copy carries edits not yet on disk: keep them, say if the disk moved on
+        if ((f.mtime ?? null) !== existing.mtime) els.toast.show(`${existing.name} changed on disk. Your unsaved edits are kept; reload to see the new version.`, { duration: 8000 });
+      } else {
+        existing.content = f.content;
+        existing.mtime = f.mtime ?? null;
+        existing.updatedAt = Date.now();
+        await store.putDocument(existing);
+        els.editor.forgetDocument(existing.id);
+      }
       last = existing;
     } else {
       last = await createDocument({ name: f.name, content: f.content, handle: f.handle, mtime: f.mtime ?? null, open: false });
@@ -509,7 +520,7 @@ function schedulePreview() { renderPreview(); }
 
 // --- Wiring: editor events ---------------------------------------------------
 els.editor.addEventListener('doc-change', (e) => {
-  if (active?.handle || active?.remote) { diskDirty = true; updateSavedStatus(); }
+  if (active?.handle || active?.remote) { diskDirty = true; active.dirty = true; updateSavedStatus(); } // dirty is persisted by the autosave
   autosave();
   updateStats(e.detail.value);
   renderPreview();
@@ -702,8 +713,10 @@ function unitAsComment(unit) {
   const fm = (k) => text.match(new RegExp(`^${k}: (\\S+)$`, 'm'))?.[1] ?? null;
   const committed = fm('mode') === 'commit' || fm('worktree') === 'clean';
   const head = fm('head');
+  const deleted = unit.status === 'deleted';
   let where = loc ? `\`${loc.path}:${loc.start}-${loc.end}\`` : `\`${unit.file?.path ?? unit.name}\``;
-  if (loc && committed && briefMeta?.repo && head) where = `[${where}](${briefMeta.repo}/blob/${head}/${loc.path}#L${loc.start}-L${loc.end})`;
+  if (deleted) where = `was ${where}`; // the old-side span: those lines hold something else at head, so no link
+  if (loc && !deleted && committed && briefMeta?.repo && head) where = `[${where}](${briefMeta.repo}/blob/${head}/${loc.path}#L${loc.start}-L${loc.end})`;
   const sig = unit.heading.replace(/ — .*$/, '').trim(); // `sig` — status · `path:lines` → `sig`
   const status = unit.status === 'other' ? '' : ` — ${unit.status}`;
   const context = [slots.purpose && `**${slots.contextLabel ?? 'Context'}:** ${slots.purpose}`, slots.changes && `**Changes:** ${slots.changes}`].filter(Boolean).join('\n\n');
@@ -745,9 +758,10 @@ function editNote() {
     els.editor.insertAtLine(target.line, target.insert + '\n');
     refreshBrief.flush(els.editor.getValue());
   }
-  els.editor.revealLine(target.line + (target.exists ? 0 : 1));
-  els.editor.gotoLine(target.line + (target.exists ? 0 : 1));
-  els.editor.vimKeys('A');
+  const line = target.line + (target.exists ? 0 : 1);
+  els.editor.revealLine(line);
+  if (settings.vim) { els.editor.gotoLine(line); els.editor.vimKeys('A'); } // append at the end, insert mode
+  else els.editor.gotoLineEnd(line); // the caret after **Notes:** … , not before the label
 }
 
 els.outline.addEventListener('goto-line', (e) => gotoBriefLine(e.detail.line));
@@ -768,14 +782,22 @@ addEventListener('pagehide', () => {
 function takeStoredPosition(url) {
   try { const pos = JSON.parse(sessionStorage.getItem(posKey(url)) ?? 'null'); sessionStorage.removeItem(posKey(url)); return pos; } catch { return null; }
 }
-function restorePosition(url) {
-  applyPosition(takeStoredPosition(url));
-}
 
 /** ?brief=<url>: open (or refresh) the document served by a local review-brief viewer. */
 async function openRemoteBrief(url) {
   const fresh = await files.fetchRemote(url);
   let doc = docs.find((d) => d.remote === url);
+  if (doc?.dirty) {
+    // the browser copy carries edits not yet saved to disk (the reviewer's notes): a page load must not
+    // discard them. Open that copy; if the file moved on, offer the reload the watch would offer.
+    const moved = fresh.mtime !== doc.mtime;
+    await openDocument(doc.id);
+    diskDirty = true;
+    updateSavedStatus();
+    if (moved) els.toast.show(`${fresh.name} changed on disk. Your unsaved edits are kept; reload to see the new version.`, { duration: 8000, action: 'Reload', onAction: reload });
+    else els.toast.show(`Opened ${fresh.name} with your unsaved edits`);
+    return;
+  }
   if (doc) {
     doc.content = fresh.content; doc.mtime = fresh.mtime; doc.name = fresh.name; doc.updatedAt = Date.now();
     await store.putDocument(doc);
@@ -1001,6 +1023,7 @@ els.files.addEventListener('close', async (e) => {
   // a file from disk closes only when the disk has everything the editor has; otherwise ask
   const d = docs.find((x) => x.id === e.detail.id);
   if (d?.handle && !d.readOnly) {
+    if (d.id === active?.id) autosave.flush(); // compare the editor's text, not a copy up to 400 ms old
     let same = false;
     try { same = (await files.readHandle(d.handle)).content === d.content; } catch { /* permission gone: treat as unsaved */ }
     if (!same) { els.toast.show(`${d.name} has edits not saved to disk`, { duration: 8000, action: 'Close anyway', onAction: () => closeDocumentById(d.id) }); return; }
@@ -1163,11 +1186,11 @@ async function boot() {
   } else if (params.has('brief')) {
     const url = new URL(params.get('brief'), location.href).toString();
     try {
+      if (params.has('unit')) takeStoredPosition(url); // an explicit landing beats a remembered place
       await openRemoteBrief(url);
       // ?unit=<id>: arrived from a source file's outline — land on that unit
       const unitId = params.get('unit');
       if (unitId && brief) { const u = brief.units.find((x) => x.id === unitId); if (u) jumpToUnit(u); history.replaceState(null, '', `?brief=${encodeURIComponent(params.get('brief'))}`); }
-      else restorePosition(url);
     }
     catch (err) {
       els.toast.show(`Could not load the brief from ${url}: ${err.message}`, { kind: 'error', duration: 10000 });
