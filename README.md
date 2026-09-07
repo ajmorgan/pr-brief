@@ -18,7 +18,13 @@ Requires `ast-grep` (`brew install ast-grep`), `git`, and `node >= 22.18` (the s
 
 ## Installing on another machine
 
-Copy this directory to `~/.claude/skills/review-brief` (the commands in `SKILL.md` use that path) and install the three dependencies: `git`, `ast-grep` (`brew install ast-grep`), `node >= 22.18`. Nothing else: the viewer is a prebuilt static bundle, rules are plain YAML, and all state lives in each reviewed repository's `.git/review-brief/`. Run `node scripts/extract.ts --check` to confirm, `bash scripts/selftest.sh` to be sure.
+Clone the repository to `~/.claude/skills/review-brief` (the commands in `SKILL.md` use that path):
+
+```sh
+git clone git@github.com:ajmorgan/review-brief.git ~/.claude/skills/review-brief
+```
+
+Then install the three dependencies: `git`, `ast-grep` (`brew install ast-grep`), `node >= 22.18`. Nothing else: the viewer is a prebuilt static bundle, rules are plain YAML, and all state lives in each reviewed repository's `.git/review-brief/`. Run `node scripts/extract.ts --check` to confirm, `bash scripts/selftest.sh` to be sure.
 
 ## How it works
 
