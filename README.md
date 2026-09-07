@@ -56,7 +56,7 @@ scripts/brief-format.ts  shared parser
 scripts/selftest.sh      builds a fixture repo and checks the unit table
 scripts/viewer.ts        localhost server: serves viewer/ + GET/PUT /brief + GET /file
 viewer/                  the xor editor (vim mode, markdown preview, brief mode); this is its only copy
-rules/<lang>/units.yml   ast-grep rules per language (TypeScript, TSX, JavaScript, Java)
+rules/<lang>/units.yml   ast-grep rules per language (the thirteen listed under Languages below)
 sgconfig.yml             ast-grep project config pointing at rules/
 references/spec.md       the specification
 references/example-brief.md

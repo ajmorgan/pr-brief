@@ -15,7 +15,7 @@ Agentic coding produces more change per hour than a person can hold in their hea
 2. **File is the unit; function is the drill-down.** Every changed file gets a section. Inside it, every changed function/type gets an entry. Anything else in the file lands in a mandatory "other changes" bucket.
 3. **Prose lives only in labelled slots with word budgets.** The agent fills each unit's `<Kind> Context:` and `Changes:` (slot keys `does`/`change`; a deleted unit's `Context:` is key `did`), the file-level `Context:`/`Changes:`, and bullets. Nothing else.
 4. **Descriptive, not justifying.** `Changes:` states what the code now does differently. "Why" is out of scope for v1 — the agent narrating its own work drifts into rationalizing.
-5. **Nothing is dropped.** If a change cannot be attributed to a function, it still appears with its hunk. If a language is unsupported, the whole file appears as one unit and says so.
+5. **Nothing is dropped.** If a change cannot be attributed to a function, it still appears with its hunk. If a language is unsupported, the whole file appears as one unit and says so. The one exception is deliberate: in an added file, the license header, package line and import lines are not shown as a change to review (§6.3).
 6. **Verifiable.** A lint confirms every slot is filled and the structure matches the skeleton.
 7. **Executable by the agent without judgment calls.** The skeleton is the prompt, every slot carries its own instruction, done means lint exits 0 (§16).
 8. **Incremental.** The brief carries its own cache (§15). A rerun re-narrates only units whose code changed, badges them, and never touches what the reviewer wrote.
@@ -31,10 +31,10 @@ What this skill does differently: it runs **locally and pre-PR** (uncommitted wo
 ## 3. Non-goals (v1)
 
 - Hunting for bugs (that is `/code-review`). The brief's `Review Observations:` slot records what a careful reader notices in passing; it is not a review pass.
-- Rename/move detection (see §12).
+- Semantic rename detection. Renamed files come from git (`-M`) and renamed units from a similarity heuristic (§12); nothing deeper.
 - A viewer. Output is Markdown with `path:line` links; any editor or the terminal renders it.
 - Explaining *why* a change was made.
-- Languages beyond TypeScript/JavaScript and Java, except via the unsupported-file fallback.
+- Languages without a rules directory (§6.2a lists the thirteen that have one); they get the whole-file fallback.
 
 ## 4. Invocation
 
@@ -86,7 +86,7 @@ git show <head>:<path> / worktree ┘         │
 ```
 
 - **extract** — deterministic. Runs preflight first (§4a; exit 2 on any missing dependency). Reads the existing `REVIEW_BRIEF.md` if present (§15), produces `units.json` (the fact table) and `skeleton.md` (the brief with slots either empty or pre-filled from the previous brief). This step never calls a model.
-- **agent** — reads `skeleton.md`, the full new-side source of each changed file, and writes prose into slots. May read other files for context. May not edit anything outside a slot.
+- **agent** — reads `REVIEW_BRIEF.md`, the full new-side source of each changed file, and writes prose into slots. May read other files for context. May not edit anything outside a slot.
 - **lint** — deterministic. Fails if any slot is empty, any heading was added/removed/reordered, or any word budget is exceeded. On failure the agent fixes and re-lints; the brief is not presented until lint passes.
 
 ## 6. Extraction algorithm
@@ -102,11 +102,11 @@ Parse each `@@ -oldStart,oldLen +newStart,newLen @@` header. For each file colle
 - `newRanges`: `[newStart, newStart+newLen)` for hunks with `newLen > 0`
 - `oldRanges`: `[oldStart, oldStart+oldLen)` for hunks with `oldLen > 0`
 
-Also record file status from `git diff --name-status <range>`: `A` (added), `D` (deleted), `M` (modified), `R` (renamed, treated as `D` + `A` in v1 — see §12), and whether git considers the file binary.
+Also record file status from `git diff --name-status <range>`: `A` (added), `D` (deleted), `M` (modified), `R` (renamed, paired by git `-M`: one section under the new path, `renamed from <old>` in its heading, old content read from the old path — see §12), and whether git considers the file binary.
 
 Whitespace-only hunks are kept (they still change lines) but the unit is tagged `whitespace-only` if `git diff -w` produces no hunk for it.
 
-The output file (`REVIEW_BRIEF.md` or `--out`) is excluded via a pathspec (`-- . ':!REVIEW_BRIEF.md'`). On first run the skill offers to add it to `.git/info/exclude` (local, never committed) so it stays out of `git status` too.
+The output file (`REVIEW_BRIEF.md` or `--out`) is excluded via a pathspec (`-- . ':!REVIEW_BRIEF.md'`). On first run extract adds it to `.git/info/exclude` (local, never committed) so it stays out of `git status` too.
 
 ### 6.2 Symbol tables
 
@@ -135,7 +135,7 @@ For each file:
    - `new` if no old-side symbol has the same `scope.name` and kind;
    - `modified` otherwise.
 2. **Deleted units.** For every `oldRange`, find the innermost old-side symbol overlapping it. If no new-side symbol has the same `scope.name` and kind, the unit is `deleted`.
-3. **Other changes.** Every `newRange` (and `oldRange` for pure deletions) not covered by any symbol at all becomes an `other` unit with its hunk. Typical contents: imports, top-level constants, comments outside functions, decorators on their own lines, package declarations.
+3. **Other changes.** Every `newRange` (and `oldRange` for pure deletions) not covered by any symbol at all becomes an `other` unit with its hunk. Typical contents: imports, comments outside functions, decorators on their own lines, package declarations; top-level constants are units wherever the language's rules have a `const` kind. Two refinements: in an added file the license header, package line and import lines are not collected (they are not a change to review), and a hunk of nothing but blank lines between symbols is collected and tagged `whitespace-only` so the file section never has slots over an empty diff.
 4. **Container-only changes.** If a change overlaps a class/interface body but no member (e.g. a new field line, a changed `extends`), the innermost symbol is the container. It gets an entry of kind `class`/`interface`/… with only the hunk lines that are *not* inside a member. Members remain their own entries.
 
 Ordering within a file: by `start` line on the new side; deleted units are placed at the position of their old `start` relative to the nearest surviving neighbour. Files are ordered by path (see §11).
@@ -145,13 +145,13 @@ Limitation: git diffs are line-based, so two symbols that share a line (a minifi
 ### 6.4 Hunk selection per unit
 
 - If the unit's new-side span is ≤ `--full-fn-max` lines, **or at least a third of its lines (old + new) changed**: emit the **whole function with changes marked** — i.e. `git diff -U<big> <range> -- <path>` clipped to `[start, end]`, so unchanged lines appear as context and changed lines carry `+`/`-`.
-- Otherwise: emit the raw hunk(s) intersecting the unit, at `-U3`.
+- Otherwise: emit the raw hunk(s) intersecting the unit, with 6 lines of context.
 - Deleted units: the old-side body, all lines prefixed `-`.
 - `other` units: the raw hunk at `-U3`.
 
 ### 6.5 Callers
 
-For every `modified` and `deleted` unit of kind `function`/`method`/`constructor`/`arrow`, extract finds call sites across the repo on the new side (old side for deleted units):
+For every `modified` and `deleted` unit of kind `function`/`method`/`constructor`/`arrow`, in a language that has a call syntax to search (Bash, HTML, CSS, YAML and Markdown units carry no Callers line), extract finds call sites across the repo on the new side — for a deleted unit too, since the sites that remain are the ones now broken:
 
 - TS/JS: `call_expression` whose function is the identifier `name`, or a `member_expression` whose property is `name`; `new_expression` for classes.
 - Java: `method_invocation` whose name is `name`; `object_creation_expression` for constructors.
@@ -172,9 +172,9 @@ The viewer's sidebar stacks the open documents (brief plus jumped-into source fi
 
 ### 6.6 Unsupported or unparseable files
 
-If ast-grep has no grammar for the file, or parsing fails, the file gets **one** unit of kind `file`, tagged `unsupported-language` or `parse-error`, with the full diff at `-U3`. The file section says so explicitly. This is the only situation where a function-level breakdown is missing, and it is always labelled.
+If ast-grep has no grammar for the file, the file gets **one** unit of kind `file`, tagged `unsupported-language`, with the full diff. The file section says so explicitly. This is the only situation where a function-level breakdown is missing, and it is always labelled. (tree-sitter parses error-tolerantly: a file with syntax errors still yields the units it could recover, and there is no parse-error tag.)
 
-Binary files get a one-line section: path, status, byte sizes. No slots.
+Binary files get a one-line section: `Binary file; <status>. No units.` No slots.
 
 ## 7. Unit table (`units.json`)
 
@@ -184,7 +184,7 @@ The fact table the agent and the lint both read. One record per unit:
 |---|---|
 | `path` | repo-relative |
 | `fileStatus` | `A` `M` `D` `R` |
-| `kind` | code: `function` `method` `constructor` `arrow` `class` `interface` `type` `enum` `record` `annotation` `object` `field` `const` `test` `block`; data and markup: `key` `item` `doc` `section` `rule` `element` `script` `style`; buckets: `other` `file` |
+| `kind` | code: `function` `method` `constructor` `arrow` `class` `interface` `type` `enum` `record` `annotation` `object` `namespace` `field` `const` `test` `block`; data and markup: `key` `item` `doc` `section` `rule` `element` `script` `style`; buckets: `other` `file` |
 | `name` | symbol name, or `(imports)`, `(top-level)`, `(file)` for non-symbol units |
 | `scope` | enclosing names, `.`-joined, may be empty |
 | `status` | `new` `modified` `deleted` |
@@ -226,7 +226,8 @@ Anonymous callbacks (arrow functions passed as arguments) are **not** units; cha
 | `method` | `method_declaration` |
 | `constructor` | `constructor_declaration` |
 | `class` | `class_declaration` |
-| `interface` | `interface_declaration`, `annotation_type_declaration` |
+| `interface` | `interface_declaration` |
+| `annotation` | `annotation_type_declaration` |
 | `enum` | `enum_declaration` |
 | `record` | `record_declaration` |
 | `field` | `field_declaration` |
@@ -313,11 +314,14 @@ Add `rules/<lang>/*.yml` and a line in the language→extension map. No other ch
 ---
 
 ## `config/app.yaml` — modified · whole file
+<!-- rb:file path="config/app.yaml" hash="…" -->
 
 **File Context:** <SLOT>
 
 **Changes:** <SLOT>
 
+<!-- rb:unit id="config/app.yaml#(file)" kind="file" status="modified" hash="…" -->
+- `config/app.yaml` (whole file; no unit rules for this file type) — <one line, ≤25 words — SLOT; an added file gets the fixed text `new file`>
 ```diff
 <full diff>
 ```
@@ -337,7 +341,7 @@ Rules:
 
 ### 9a. Output location
 
-`REVIEW_BRIEF.md` at the repository root. Rationale: a fixed, predictable name the reviewer opens by habit; a name unlikely to collide with anything a project already has (`REVIEW.md` is used by some repos for review guidelines); shouts what it is in a directory listing. It is regenerated on every run — it is a view, not a record. It is excluded from the diff (§6.1) and offered to `.git/info/exclude` so it never ends up in a commit. A copy is also printed to the terminal after the summary block, so the brief is in the session transcript.
+`REVIEW_BRIEF.md` at the repository root. Rationale: a fixed, predictable name the reviewer opens by habit; a name unlikely to collide with anything a project already has (`REVIEW.md` is used by some repos for review guidelines); shouts what it is in a directory listing. It is regenerated on every run — it is a view, not a record. It is excluded from the diff (§6.1) and offered to `.git/info/exclude` so it never ends up in a commit. Extract prints one summary line to the terminal.
 
 The brief, like a Graphite tour, is meant to be read top to bottom: summary → file purpose → file changes → functions.
 
@@ -374,7 +378,7 @@ Three levels, and a fixed order of work.
 | 2 | file order | path order | confirmed as starting point; revisit after use |
 | 3 | range | two named modes: `wip` (working tree vs HEAD) and `branch` (merge-base vs working tree); raw `git diff` args as escape hatch | see §4 on merge-base vs two-dot |
 | 4 | callers | **in v1**, computed by extract, shown as an immutable line under each function heading; `Context:` may reference it | name-based, labelled as such |
-| 5 | output | `REVIEW_BRIEF.md` at repo root, excluded from the diff, offered to `.git/info/exclude`; also echoed to terminal | §9a |
+| 5 | output | `REVIEW_BRIEF.md` at repo root, excluded from the diff, added to `.git/info/exclude`; one summary line to the terminal | §9a |
 | 6 | intent / "why" | allowed at file level (`Changes:`); at function level only as a trailing clause after the behavioral description | §10 |
 | 7 | file-level shape | `Context:` + `Changes:`, mirroring Graphite's upfront per-file blurb | §2a |
 | 8 | name | `review-brief` (skill), `REVIEW_BRIEF.md` (output) | "tour" is taken twice (Graphite, Diff Tours); "brief" = read before the review; distinct from /code-review output |
@@ -387,8 +391,8 @@ Three levels, and a fixed order of work.
 
 ## 12. Edge cases
 
-- **Renamed file (`R`)**: v1 treats as delete + add of the whole file. The two sections are placed adjacently and the header notes `renamed from <old path>`. Function-level attribution runs on the new path normally.
-- **Renamed function**: appears as `deleted` + `new`, adjacent by position. Rename detection (normalized body equality) is v2.
+- **Renamed file (`R`)**: git's rename detection (`-M`) pairs it. The brief has one section under the new path, its heading says `renamed from <old path>`, and the old content is read from the old path, so function-level attribution runs normally.
+- **Renamed unit**: a `deleted` and a `new` unit of the same kind are paired when the deleted body has at least two lines beyond its signature (braces and annotations aside) and, after a word-boundary swap of the old name for the new, ≥90% of its trimmed lines are identical. The pair is one `modified` unit with `renamed from` in its heading, listed under **Renamed** in the summary and excluded from **Signature changes**. Boilerplate bodies (`return true;`, `TODO()`) never pair.
 - **Moved function** (same name, different file): two units, one deleted in the old file and one new in the new file. Lint does not attempt to link them.
 - **Whitespace-only change** to a function: unit is kept, tagged `whitespace-only`; the agent may write `Changes:` as "formatting only" — the lint accepts that exact phrase under budget.
 - **Generated files**: no special casing in v1. If a `.gitattributes` `linguist-generated` marker exists, extract tags the file `generated` and the file section collapses to the unsupported-language shape.
@@ -397,15 +401,15 @@ Three levels, and a fixed order of work.
 - **Deleted file**: every symbol is `deleted`. `File:` slot is written in past tense.
 - **Changes in a function's signature line only**: attributed to that function normally.
 - **Overlapping symbols** (decorators, nested functions): innermost wins; the outer is not listed unless it has changes outside every inner symbol (§6.3.4).
-- **Old-side parse fails but new-side succeeds** (or vice versa): units are computed from the side that parsed; the file is tagged `parse-error:old|new` and the header says so.
+- **Syntax errors on one side**: tree-sitter parses error-tolerantly, so units come from whatever each side recovered; there is no parse-error tag.
 
 ## 13. Future (not v1)
 
 - **Type-resolved callers**: replace the name-based caller search (§6.5) with LSP or tsc/javac symbol resolution to remove false positives on common names.
-- **Rename detection**: pair a `deleted` and a `new` unit whose normalized bodies match ≥ 90%.
+- ~~Rename detection~~ — implemented, see §12.
 - **`Why:` slot**, clearly separated from `Changes:`, sourced from commit messages when the range is committed.
 - **Reviewer marks**: `- [ ] ok` / `- [ ] flag` per unit, and a companion `/review-brief-flags` that hands flagged units back to the agent.
-- **More languages**: Python, Go, Zig, Rust — one rules directory each.
+- **More languages**: Zig, Rust, C — one rules directory each (Python and Go are done, §6.2a).
 - **Ordering by call graph** or entry points.
 
 ## 14. Skill layout
@@ -568,7 +572,7 @@ If the new run's `mode` or `base` differs from the previous front matter (e.g. `
 - Every heading has exactly one `rb:` marker and markers match the fact table (ids, hashes, statuses).
 - Carried-over slots are byte-identical to the previous brief unless the unit is *updated* or *new* (the agent may not silently rewrite prose for unchanged code; if it wants to, the reviewer asked for `--fresh`).
 - `Notes:` slots are byte-identical to the previous brief, modulo the staleness prefix.
-- Front matter `previous.head` / `previous.snapshot` equal the previous brief's `head` / `snapshot`.
+- The `previous:` front-matter block is informational; lint does not check it.
 - No `rb:revise` notes remain in the final brief.
 
 ## 16. LLM executability
@@ -619,7 +623,7 @@ The loop is: run lint → do exactly what each line says → run lint. Nothing e
 
 - All state is in files. If the agent's context is summarized or the session restarts mid-brief, `lint` lists the remaining empty slots and work continues; nothing is lost.
 - The agent fills slots by **editing the skeleton in place**, one slot per edit, using the unique token as the match string. It never rewrites the whole file, so a 40-file brief does not have to fit in one output.
-- Extract can emit the skeleton **one file section at a time** (`extract --section <path>`) for very large briefs; SKILL.md uses this mode above a unit-count threshold set in the skill, so the agent is not asked to hold the entire brief.
+- Extract can print one file section (`extract --section <path>`) after writing the whole brief, for an agent that wants to work file by file; SKILL.md does not use it by default — Step 1 relays the output of `--list`, `--check` and `--section` and stops.
 
 ### 16.5 Triggering
 
