@@ -72,7 +72,10 @@ The tab updates itself the moment the brief is rewritten on disk (server-sent
 events; only a brief opened from a local file still polls), and only the file
 cards near the viewport are laid out,
 so a brief with hundreds of units stays quick. `]u` / `[u` step through units, `:note`
-adds your note to the unit under the cursor, `:changed` shows only units that
+adds your note to the unit under the cursor, `:copy` (or the copy icon on a
+unit heading in the preview) copies the unit as a PR comment — your Notes,
+with the brief's Purpose and Changes folded under them, and a link to the
+lines when the code is committed — `:changed` shows only units that
 changed since the last brief, `:w` writes back to the file, `:rel` reloads it. `node scripts/viewer.ts --stop` stops the server.
 Saving is refused if the file changed on disk since you opened it (the agent
 regenerated it) — reload first. Your `**Notes:**` survive regeneration.

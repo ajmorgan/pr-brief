@@ -45,8 +45,8 @@
       <!-- app -->
       <button type="button" class="tool-btn palette-pill" id="btn-palette" title="Command palette (⌘K)"><kbd>⌘K</kbd><span class="label">Commands</span></button>
       <div class="more" id="more">
-        <button type="button" class="icon-btn" id="btn-more" aria-label="More" aria-haspopup="menu" aria-expanded="false" title="More">⋯</button>
-        <div class="more-menu" id="more-menu" role="menu" hidden>
+        <button type="button" class="icon-btn" id="btn-more" aria-label="More" aria-haspopup="menu" popovertarget="more-menu" title="More">⋯</button>
+        <div class="more-menu" id="more-menu" role="menu" popover>
           <button type="button" role="menuitem" data-menu="theme">Color scheme… <kbd>⌘⇧T</kbd></button>
           <button type="button" role="menuitemcheckbox" data-menu="vim" aria-checked="true">Vim mode <kbd>⌘⇧V</kbd></button>
           <button type="button" role="menuitemcheckbox" data-menu="wrap" aria-checked="true">Line wrap</button>

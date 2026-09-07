@@ -538,6 +538,13 @@ app-toast {
 /* review-brief file sections: a card per file with a sticky heading and a status pill */
 .markdown-body section.rb-file { margin: 1.75em 0; padding: 0 1.2em 0.6em; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); content-visibility: auto; }
 .markdown-body .rb-unit { display: flow-root; } /* owns its margins: units tile the card with no gaps between scroll-spy targets */
+.markdown-body .rb-copy {
+  margin-left: 0.5em; padding: 0.1rem 0.3rem; vertical-align: middle; border: 0; border-radius: 4px;
+  background: transparent; color: var(--muted); cursor: pointer; opacity: 0; transition: opacity 0.12s;
+}
+.markdown-body .rb-copy svg { width: 0.9em; height: 0.9em; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.1em; }
+.markdown-body .rb-unit:hover .rb-copy, .markdown-body .rb-copy:focus-visible { opacity: 1; }
+.markdown-body .rb-copy:hover { color: var(--accent); background: var(--surface2); }
 .markdown-body section.rb-file > h2 {
   position: sticky; top: 0; z-index: 2;
   margin: 0 -1.2em 1em; padding: 0.55em 1.2em; font-size: 1.15em;
@@ -587,15 +594,15 @@ app-toast {
 .palette-pill { gap: 0.4rem; padding: 0.3rem 0.65rem 0.3rem 0.45rem; border-color: var(--border); background: var(--bg); color: var(--muted); font-size: 0.85rem; }
 .palette-pill:hover { color: var(--fg); background: var(--surface2); }
 .palette-pill kbd { margin: 0; opacity: 1; }
-.more { position: relative; }
+/* the ⋯ menu is a native popover: open, light-dismiss and Escape are the browser's; only its place is ours */
 .more-menu {
-  position: absolute; right: 0; top: calc(100% + 0.3rem); z-index: 40;
+  position: fixed; inset: auto; margin: 0; overflow: visible; color: inherit;
   min-width: 14rem; padding: 0.3rem;
-  display: flex; flex-direction: column;
+  flex-direction: column;
   background: var(--surface); border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
-.more-menu[hidden] { display: none; }
+.more-menu:popover-open { display: flex; }
 .more-menu button {
   display: flex; align-items: center; gap: 0.6rem;
   width: 100%; padding: 0.4rem 0.6rem 0.4rem 1.7rem;

@@ -92,6 +92,37 @@ export function parseBrief(text) {
 /** Strip the link wrapper extract puts around paths: [`x`](x#L1) → `x`. */
 function unlink(text) { return text.replace(/\[(`[^`]*`)\]\([^)]*\)/g, '$1'); }
 
+/** A unit's prose slots as written in the brief: { purpose, changes, notes }, missing keys absent. */
+export function unitSlots(text, unit) {
+  const lines = text.split('\n').slice(unit.line - 1, unit.end);
+  const out = {};
+  let fenceLen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const fm = l.match(FENCE);
+    if (fenceLen === 0 && fm) { fenceLen = fm[1].length; continue; }
+    if (fenceLen > 0) { if (fm && fm[1].length >= fenceLen && l.trim() === fm[1]) fenceLen = 0; continue; }
+    const m = l.match(/^\*\*(Purpose|Changes|Notes):\*\*\s*(.*)$/);
+    if (!m) continue;
+    const parts = [m[2]];
+    for (let j = i + 1; j < lines.length; j++) {
+      const n = lines[j];
+      if (n.trim() === '' || n.startsWith('<!--') || n.startsWith('```') || n.startsWith('**') || n.startsWith('#')) break;
+      parts.push(n);
+    }
+    const v = parts.join('\n').trim();
+    if (v && !v.startsWith('<<rb:')) out[m[1].toLowerCase()] = v;
+  }
+  return out;
+}
+
+/** The `path:start-end` a unit heading names, or null. */
+export function unitLocation(unit) {
+  const ms = [...unit.heading.matchAll(/`([^`\s]+?):(\d+)-(\d+)`/g)];
+  const m = ms[ms.length - 1];
+  return m ? { path: m[1], start: Number(m[2]), end: Number(m[3]) } : null;
+}
+
 function badgeOf(text) {
   if (text.includes('updated since last')) return 'updated';
   if (text.includes('new since last')) return 'new';

@@ -179,6 +179,17 @@ export function renderMarkdown(src) {
     if (h2?.dataset.line) sec.dataset.spyLine = h2.dataset.line;
     sec.style.containIntrinsicSize = `auto ${60 + sec.querySelectorAll('[data-line]').length * 57}px`; // ≈ measured: 57px per block with hunks folded
   }
+  // unit headings: a copy button (the preview turns its click into a copy-unit event)
+  for (const h3 of fragment.querySelectorAll('.rb-unit > h3')) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'rb-copy';
+    b.title = 'Copy this unit as a PR comment';
+    b.setAttribute('aria-label', 'Copy this unit as a PR comment');
+    b.dataset.copyLine = h3.dataset.line ?? h3.parentElement.dataset.spyLine;
+    b.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>';
+    h3.append(b);
+  }
   // file heading: the status after the dash becomes a pill (added / modified / deleted / renamed from …)
   for (const h2 of fragment.querySelectorAll('section.rb-file > h2')) {
     const tn = [...h2.childNodes].find((n) => n.nodeType === Node.TEXT_NODE && n.nodeValue.includes(' — '));

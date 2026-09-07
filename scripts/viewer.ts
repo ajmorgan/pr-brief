@@ -55,6 +55,18 @@ const types: Record<string, string> = {
   ".md": "text/markdown; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".woff2": "font/woff2",
 };
 
+// The repository's web URL (GitHub-style), from the origin remote, so the editor can link a copied
+// unit to its lines. null when there is no origin or it is not an http(s)/ssh URL.
+function repoWeb(dir: string): string | null {
+  const r = spawnSync("git", ["remote", "get-url", "origin"], { cwd: dir, encoding: "utf8" });
+  if (r.status !== 0) return null;
+  const u = r.stdout.trim().replace(/\.git$/, "");
+  const ssh = u.match(/^(?:ssh:\/\/)?git@([^:/]+)[:/](.+)$/);
+  if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
+  return /^https?:\/\//.test(u) ? u : null;
+}
+let repo = repoWeb(root);
+
 // Build id of the served app (the VERSION stamp in sw.js), re-read on every call so an open tab
 // notices a sync-viewer.sh run and reloads itself.
 function viewerBuild(): string | null {
@@ -67,7 +79,7 @@ function viewerBuild(): string | null {
 const clients = new Set<import("node:http").ServerResponse>();
 async function metaJSON(): Promise<string> {
   const s = await stat(briefPath).catch(() => null);
-  return JSON.stringify({ path: briefPath, name: path.basename(briefPath), mtime: s?.mtimeMs ?? null, viewer: viewerBuild() });
+  return JSON.stringify({ path: briefPath, name: path.basename(briefPath), mtime: s?.mtimeMs ?? null, viewer: viewerBuild(), repo });
 }
 let broadcastTimer: NodeJS.Timeout | null = null;
 function broadcastMeta(): void {
@@ -124,7 +136,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/brief/meta" && req.method === "GET") {
       const s = await stat(briefPath);
       res.writeHead(200, { "Content-Type": types[".json"], "Cache-Control": "no-store" });
-      return res.end(JSON.stringify({ path: briefPath, name: path.basename(briefPath), mtime: s.mtimeMs, viewer: viewerBuild() }));
+      return res.end(JSON.stringify({ path: briefPath, name: path.basename(briefPath), mtime: s.mtimeMs, viewer: viewerBuild(), repo }));
     }
     if (url.pathname === "/events" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
@@ -168,6 +180,7 @@ const server = createServer(async (req, res) => {
       // the brief's repository is where /file reads from: take it from the caller, else from the brief's directory
       const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: path.dirname(next), encoding: "utf8" });
       root = typeof body.root === "string" && fs.existsSync(body.root) ? body.root : r.status === 0 ? r.stdout.trim() : root;
+      repo = repoWeb(root);
       process.stdout.write(`now serving ${briefPath} (repo ${root})\n`);
       watchBrief();
       broadcastMeta();

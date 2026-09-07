@@ -1,7 +1,7 @@
 // <markdown-preview>: renders markdown and reports scroll position in
 // source-line terms so the editor and preview can stay aligned.
 // Emits: preview-scroll {line, fraction}; preview-section {line} when the unit or file card under
-// the top of the viewport changes (scroll-spy for the outline).
+// the top of the viewport changes (scroll-spy for the outline); copy-unit {line} from a unit's copy button.
 
 import { renderMarkdown } from '../lib/markdown.js';
 
@@ -89,6 +89,12 @@ export class MarkdownPreview extends HTMLElement {
       const id = decodeURIComponent(a.getAttribute('href').slice(1));
       const target = this.#article.querySelector(`[id="${CSS.escape(id)}"]`);
       if (target) this.#withLayout(target, () => target.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+      return;
+    }
+    const copy = e.target.closest('button[data-copy-line]');
+    if (copy) {
+      e.preventDefault();
+      this.dispatchEvent(new CustomEvent('copy-unit', { detail: { line: Number(copy.dataset.copyLine) } }));
       return;
     }
     // Double-click a block to jump the editor to its source line.

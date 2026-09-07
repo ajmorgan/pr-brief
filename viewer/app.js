@@ -351,6 +351,7 @@ let watchTimer = null;
 let watchSource = null;
 let watchNotifiedFor = null;
 let viewerBuild = null; // the served app's build id when this page loaded; a change means the viewer was rebuilt
+let briefMeta = null;   // the last meta frame from the viewer server (path, mtime, viewer build, repo web URL)
 function startWatch() {
   clearInterval(watchTimer);
   watchTimer = null;
@@ -372,6 +373,7 @@ async function onWatchMeta(meta) {
   try {
     if (active.remote) {
       meta ??= await files.remoteMeta(active.remote);
+      briefMeta = meta;
       // the viewer's own code was rebuilt (build.mjs --stamp, sync-viewer.sh): this page is stale, reload it
       if (meta.viewer) {
         if (viewerBuild === null) viewerBuild = meta.viewer;
@@ -540,6 +542,8 @@ els.preview.addEventListener('preview-section', (e) => {
   updateBriefStatus(e.detail.line);
 });
 
+els.preview.addEventListener('copy-unit', (e) => { if (brief) copyUnit(briefs.unitAt(brief, e.detail.line)); });
+
 els.preview.addEventListener('goto-line', (e) => {
   if (effectiveView() === 'preview') update({ view: 'split' });
   els.editor.gotoLine(e.detail.line);
@@ -588,6 +592,7 @@ els.editor.addEventListener('ex-command', async (e) => {
     case 'file': if (!requireOutline()) break; { const f = arg ? briefs.findFile(outline, arg) : null; if (f) gotoBriefLine(f.line); else if (arg) els.toast.show(`No file matching "${arg}"`, { kind: 'error' }); else pickBriefFile(); } break;
     case 'unit-next': case 'unit-prev': if (!requireOutline()) break; jumpToUnit(briefs.stepUnit(outline, els.editor.cursorLine, name === 'unit-next' ? 1 : -1, els.outline.changedOnly)); break;
     case 'note': if (!requireBrief()) break; editNote(); break;
+    case 'copy': if (!requireBrief()) break; copyUnit(briefs.unitAt(brief, els.editor.cursorLine)); break;
     case 'changed': if (!requireOutline()) break; els.outline.toggleChanged(); els.toast.show(els.outline.changedOnly ? (brief ? 'Showing units changed since the last brief' : 'Showing only symbols that are in the brief') : (brief ? 'Showing all units' : 'Showing all symbols')); break;
   }
 });
@@ -682,6 +687,50 @@ async function pickBriefFile() {
   const items = outline.files.map((f) => ({ id: f.line, label: f.path, hint: `${f.status} · ${f.units.length}` }));
   const item = await els.palette.open(items, { placeholder: 'Go to file…' });
   if (item) gotoBriefLine(item.id);
+}
+
+/** A unit as a PR comment: the reviewer's Notes up front, the brief's Purpose and Changes as folded
+ *  context (unfolded when there are no Notes), headed by the unit's location — a link to the lines on
+ *  the repository's web UI when the briefed code is committed, plain text otherwise. */
+function unitAsComment(unit) {
+  const text = els.editor.getValue();
+  const slots = briefs.unitSlots(text, unit);
+  const loc = briefs.unitLocation(unit);
+  const fm = (k) => text.match(new RegExp(`^${k}: (\\S+)$`, 'm'))?.[1] ?? null;
+  const committed = fm('mode') === 'commit' || fm('worktree') === 'clean';
+  const head = fm('head');
+  let where = loc ? `\`${loc.path}:${loc.start}-${loc.end}\`` : `\`${unit.file?.path ?? unit.name}\``;
+  if (loc && committed && briefMeta?.repo && head) where = `[${where}](${briefMeta.repo}/blob/${head}/${loc.path}#L${loc.start}-L${loc.end})`;
+  const sig = unit.heading.replace(/ — .*$/, '').trim(); // `sig` — status · `path:lines` → `sig`
+  const status = unit.status === 'other' ? '' : ` — ${unit.status}`;
+  const context = [slots.purpose && `**Purpose:** ${slots.purpose}`, slots.changes && `**Changes:** ${slots.changes}`].filter(Boolean).join('\n\n');
+  const head3 = `**${where}** ${sig}${status}`;
+  const md = slots.notes
+    ? `${head3}\n\n${slots.notes}\n\n<details><summary>Context from the review brief</summary>\n\n${context}\n\n</details>`
+    : `${head3}\n\n${context}`;
+  return { markdown: md.trim() + '\n', html: markdownToHTML(md) };
+}
+
+/** Write text and HTML together, so a rich editor (GitHub's comment box) keeps links and emphasis. */
+async function copyRich({ markdown, html }) {
+  if ('ClipboardItem' in window && navigator.clipboard?.write) {
+    await navigator.clipboard.write([new ClipboardItem({
+      'text/plain': new Blob([markdown], { type: 'text/plain' }),
+      'text/html': new Blob([html], { type: 'text/html' }),
+    })]);
+  } else {
+    await navigator.clipboard.writeText(markdown);
+  }
+}
+
+async function copyUnit(unit) {
+  if (!unit) { els.toast.show('No unit here', { kind: 'error' }); return; }
+  try {
+    await copyRich(unitAsComment(unit));
+    els.toast.show(`Copied ${unit.name} as a PR comment`);
+  } catch (err) {
+    els.toast.show(`Copy failed: ${err.message}`, { kind: 'error' });
+  }
 }
 
 /** :note — put the cursor on the reviewer's Notes line for the current unit, creating it if needed, in insert mode. */
@@ -824,6 +873,7 @@ function commands() {
     ...(brief ? [
       { id: 'bfile', label: 'Brief: go to file…', keys: ':file', run: pickBriefFile },
       { id: 'note', label: 'Brief: add or edit note for this unit', keys: ':note', run: editNote },
+      { id: 'copy-unit', label: 'Brief: copy this unit as a PR comment', keys: ':copy', run: () => { if (requireBrief()) copyUnit(briefs.unitAt(brief, els.editor.cursorLine)); } },
       { id: 'foldhunks', label: 'Brief: fold all hunks', keys: 'zM', run: () => els.editor.foldHunks() },
       { id: 'diffview', label: `Brief: ${settings.diffView === 'split' ? 'unified' : 'side-by-side'} diffs in preview`, keys: ':set diff=', run: () => update({ diffView: settings.diffView === 'split' ? 'unified' : 'split' }) },
     ] : []),
@@ -904,13 +954,16 @@ $('#btn-save').addEventListener('click', save);
 $('#btn-palette').addEventListener('click', openPalette);
 els.sidebarToggle.addEventListener('click', () => toggleSidebar());
 els.diffSwitch.addEventListener('click', (e) => { const b = e.target.closest('button[data-diff]'); if (b) update({ diffView: b.dataset.diff }); });
-// the ⋯ menu: preferences and app-level items; state lives in the status bar, so the toolbar stays quiet
-function toggleMore(open = els.moreMenu.hidden) {
-  els.moreMenu.hidden = !open;
-  els.moreBtn.setAttribute('aria-expanded', String(open));
-  if (open) els.moreMenu.querySelector('button:not([hidden])')?.focus();
-}
-els.moreBtn.addEventListener('click', () => toggleMore());
+// the ⋯ menu: preferences and app-level items; state lives in the status bar, so the toolbar stays quiet.
+// It is a native popover (the button's popovertarget opens it; light-dismiss and Escape are built in);
+// on open it is placed under the button, since the popover lives in the top layer, not in the toolbar.
+els.moreMenu.addEventListener('toggle', (e) => {
+  if (e.newState !== 'open') return;
+  const r = els.moreBtn.getBoundingClientRect();
+  els.moreMenu.style.top = `${r.bottom + 4}px`;
+  els.moreMenu.style.right = `${Math.max(4, innerWidth - r.right)}px`;
+  els.moreMenu.querySelector('button:not([hidden])')?.focus();
+});
 els.moreMenu.addEventListener('click', (e) => {
   const item = e.target.closest('[data-menu]');
   if (!item) return;
@@ -926,10 +979,8 @@ els.moreMenu.addEventListener('click', (e) => {
     case 'help': els.help.toggle(); break;
     case 'storage': showStorage(); break;
   }
-  if (!keepOpen) toggleMore(false);
+  if (!keepOpen) els.moreMenu.hidePopover();
 });
-document.addEventListener('pointerdown', (e) => { if (!els.moreMenu.hidden && !els.more.contains(e.target)) toggleMore(false); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !els.moreMenu.hidden) { toggleMore(false); els.moreBtn.focus(); } });
 els.name.addEventListener('change', () => renameDocument(els.name.value));
 els.name.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); els.name.blur(); els.editor.focus(); }
