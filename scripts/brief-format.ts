@@ -20,7 +20,7 @@ export const BUDGETS: Record<string, number> = {
   review: 60,
 };
 
-export const SHORT_KINDS = new Set(["type", "interface", "enum", "field", "class", "record", "annotation", "object", "key", "item", "doc", "rule", "element", "script", "style", "block"]);
+export const SHORT_KINDS = new Set(["type", "interface", "enum", "field", "class", "record", "annotation", "object", "namespace", "key", "item", "doc", "rule", "element", "script", "style", "block"]);
 export const CALLABLE_KINDS = new Set(["function", "method", "constructor", "arrow"]);
 
 // Slot labels. A file's description is "File Context:"; a unit's is "<Kind> Context:" for its kind
@@ -29,7 +29,7 @@ export const CALLABLE_KINDS = new Set(["function", "method", "constructor", "arr
 // Purpose:/Does:/Did:/Change:/Delta: labels are still read so earlier briefs carry over.
 export const KIND_WORD: Record<string, string> = {
   function: "Function", arrow: "Function", method: "Method", constructor: "Constructor",
-  class: "Class", interface: "Interface", enum: "Enum", record: "Record", annotation: "Annotation", object: "Object", type: "Type",
+  class: "Class", interface: "Interface", enum: "Enum", record: "Record", annotation: "Annotation", object: "Object", type: "Type", namespace: "Namespace",
   const: "Const", field: "Field",
   section: "Section", key: "Key", item: "Item", doc: "Document", rule: "Rule", element: "Element", script: "Script", style: "Style", block: "Block",
 };

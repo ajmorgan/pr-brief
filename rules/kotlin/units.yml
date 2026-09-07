@@ -40,12 +40,18 @@ rule:
     - not: { inside: { kind: function_body, stopBy: end } }
     - not: { inside: { kind: lambda_literal, stopBy: end } }
 ---
-# a top-level configuration block in a .kts script: plugins { … }, dependencies { … }, tasks.named("x") { … }
+# a top-level configuration block in a .kts script: plugins { … }, dependencies { … }, tasks.named("x") { … },
+# tasks.register<Jar>("y") { … }, tasks.withType<Test> { … }. The name is the call head before the lambda.
 id: kt-block
 language: Kotlin
 rule:
   kind: call_expression
   all:
     - inside: { kind: source_file }
-    - has: { kind: simple_identifier, pattern: $NAME }
+    - has:
+        pattern: $NAME
+        any:
+          - kind: simple_identifier
+          - kind: navigation_expression
+          - kind: call_expression
     - has: { kind: call_suffix, has: { kind: annotated_lambda } }

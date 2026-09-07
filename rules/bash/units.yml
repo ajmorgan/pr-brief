@@ -10,5 +10,9 @@ language: Bash
 rule:
   kind: variable_assignment
   all:
-    - inside: { kind: program }
+    - inside:
+        any:
+          - kind: program
+          - kind: declaration_command # export X=…, readonly X=…, declare -r X=…
+            inside: { kind: program }
     - has: { field: name, pattern: $NAME }

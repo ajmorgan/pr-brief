@@ -1,4 +1,6 @@
-# CSS units: each rule set, named by its selector list; @media / @supports / @keyframes blocks contain theirs.
+# CSS units: each rule set, named by its selector list; at-rules with a block (@media, @supports,
+# @keyframes, @font-face, @layer, @container, @page, …) are units that contain theirs. @import and
+# @charset have no block and land in Other changes.
 id: css-rule
 language: Css
 rule:
@@ -12,3 +14,5 @@ rule:
     - kind: media_statement
     - kind: supports_statement
     - kind: keyframes_statement
+    - kind: at_rule
+      has: { kind: block }

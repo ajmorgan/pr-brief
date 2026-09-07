@@ -1,26 +1,34 @@
+# a method inside a block — an anonymous class or a local class within another method — is part of
+# that enclosing method (spec §8.2), not a unit of its own
 id: java-method
 language: Java
 rule:
   kind: method_declaration
-  has:
-    field: name
-    pattern: $NAME
+  all:
+    - has:
+        field: name
+        pattern: $NAME
+    - not: { inside: { kind: block, stopBy: end } }
 ---
 id: java-constructor
 language: Java
 rule:
   kind: constructor_declaration
-  has:
-    field: name
-    pattern: $NAME
+  all:
+    - has:
+        field: name
+        pattern: $NAME
+    - not: { inside: { kind: block, stopBy: end } }
 ---
 id: java-class
 language: Java
 rule:
   kind: class_declaration
-  has:
-    field: name
-    pattern: $NAME
+  all:
+    - has:
+        field: name
+        pattern: $NAME
+    - not: { inside: { kind: block, stopBy: end } }
 ---
 id: java-interface
 language: Java
@@ -58,8 +66,10 @@ id: java-field
 language: Java
 rule:
   kind: field_declaration
-  has:
-    field: declarator
-    has:
-      field: name
-      pattern: $NAME
+  all:
+    - has:
+        field: declarator
+        has:
+          field: name
+          pattern: $NAME
+    - not: { inside: { kind: block, stopBy: end } }

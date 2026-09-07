@@ -11,8 +11,15 @@ rule:
         pattern: $NAME
     - not: # declared inside another function's body: part of that function, not a unit of its own
         inside:
-          kind: statement_block
           stopBy: end
+          kind: statement_block
+          inside: # …a function's body, that is: a namespace or `declare module` body is a statement_block too
+            any:
+              - kind: function_declaration
+              - kind: generator_function_declaration
+              - kind: method_definition
+              - kind: arrow_function
+              - kind: function_expression
 ---
 id: ts-method
 language: TypeScript
@@ -42,8 +49,15 @@ rule:
           - kind: function_expression
     - not: # declared inside another function's body: part of that function, not a unit of its own
         inside:
-          kind: statement_block
           stopBy: end
+          kind: statement_block
+          inside: # …a function's body, that is: a namespace or `declare module` body is a statement_block too
+            any:
+              - kind: function_declaration
+              - kind: generator_function_declaration
+              - kind: method_definition
+              - kind: arrow_function
+              - kind: function_expression
 ---
 id: ts-class
 language: TypeScript
@@ -132,3 +146,12 @@ rule:
             - kind: string
             - kind: template_string
           pattern: $NAME
+---
+# a namespace (or `declare module "x"`): a container, so its functions nest under it
+id: ts-namespace
+language: TypeScript
+rule:
+  kind: internal_module
+  has:
+    field: name
+    pattern: $NAME

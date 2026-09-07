@@ -1,11 +1,11 @@
-# Markdown units: sections, named by their heading (the grammar has no identifiers to capture, so
-# the name is taken from the heading line). A section runs to the next heading of the same or a
-# higher level, so subsections nest inside their parent.
+# Markdown units: sections. The grammar has no identifiers to capture (a $NAME pattern is plain
+# text here), so symbols.ts names a section from its first heading line. A section runs to the next
+# heading of the same or a higher level, so subsections nest inside their parent. Only ATX headings
+# (#, ##, …) open a section in tree-sitter-markdown: a setext heading (underlined with === or ---)
+# is text inside the enclosing section, so a setext-headed document is one unit.
 id: md-section
 language: Markdown
 rule:
   kind: section
   has:
-    any:
-      - kind: atx_heading
-      - kind: setext_heading
+    kind: atx_heading

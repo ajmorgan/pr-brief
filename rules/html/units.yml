@@ -5,12 +5,29 @@ language: Html
 rule:
   kind: element
   has:
-    kind: start_tag
+    any:
+      - kind: start_tag
+      - kind: self_closing_tag # <input id="email" />
     has:
       kind: attribute
       all:
         - has: { kind: attribute_name, regex: '^id$' }
         - has: { kind: quoted_attribute_value, has: { kind: attribute_value, pattern: $NAME } }
+---
+# the same, for an unquoted id: <div id=app>
+id: html-element.unquoted
+language: Html
+rule:
+  kind: element
+  has:
+    any:
+      - kind: start_tag
+      - kind: self_closing_tag
+    has:
+      kind: attribute
+      all:
+        - has: { kind: attribute_name, regex: '^id$' }
+        - has: { kind: attribute_value, pattern: $NAME }
 ---
 id: html-script
 language: Html

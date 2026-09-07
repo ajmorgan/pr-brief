@@ -74,7 +74,9 @@ export function scanSymbols(sg: string, dir: string): Map<string, Sym[]> {
 // A name for a unit whose rule captures none: a heading's text, an at-rule's head, or the kind itself.
 function fallbackName(kind: string, variant: string | undefined, text: string): string {
   const first = text.split("\n")[0].trim();
-  if (kind === "section") return first.replace(/^#+\s*/, "").replace(/\s*#+$/, "");
+  // a section is named by its heading line, which need not be its first line (text before a setext
+  // heading, or a setext heading itself, belongs to the enclosing ATX section)
+  if (kind === "section") return (text.split("\n").find((l) => /^\s*#+\s/.test(l)) ?? first).trim().replace(/^#+\s*/, "").replace(/\s*#+$/, "");
   if (kind === "rule" && variant === "at") return first.replace(/\s*\{.*$/, "");
   return variant ?? kind;
 }
