@@ -1,6 +1,6 @@
-# Review Brief — Skill Specification
+# PR Brief — Skill Specification
 
-> **Status:** v1.2 (2026-09-06, implemented at ~/.claude/skills/review-brief) — thirteen languages (§6.2a); links (§6.5a); viewer sidebar (§6.5b); same-work cache (§15); decisions through #14 (§11); open questions in §17
+> **Status:** v1.2 (2026-09-06, implemented at ~/.claude/skills/pr-brief) — thirteen languages (§6.2a); links (§6.5a); viewer sidebar (§6.5b); same-work cache (§15); decisions through #14 (§11); open questions in §17
 > **Purpose:** Let a human reviewer come up to speed on a body of agent-written changes, one file at a time, one function at a time, without reading raw diffs cold.
 
 ---
@@ -41,17 +41,17 @@ What this skill does differently: it runs **locally and pre-PR** (uncommitted wo
 Four modes cover the real cases. Anything else is an escape hatch.
 
 ```
-/review-brief                      # wip:    working tree (staged, unstaged, untracked) vs HEAD
-/review-brief branch               # branch: merge-base(origin/main, HEAD) vs working tree
-/review-brief all                  # all:    every tracked file vs the empty tree (brief a whole small repo)
-/review-brief commit <ref>         # commit: parent(ref) → ref; files and callers read at ref
-/review-brief -- <git diff args>   # escape hatch, passed through unchanged
+/pr-brief                      # wip:    working tree (staged, unstaged, untracked) vs HEAD
+/pr-brief branch               # branch: merge-base(origin/main, HEAD) vs working tree
+/pr-brief all                  # all:    every tracked file vs the empty tree (brief a whole small repo)
+/pr-brief commit <ref>         # commit: parent(ref) → ref; files and callers read at ref
+/pr-brief -- <git diff args>   # escape hatch, passed through unchanged
 ```
 
 - **wip** — "what did the agent just do." `git diff HEAD`.
 - **branch** — "everything on this branch." Note the **merge-base**, not `origin/main..HEAD`: a two-dot diff against `origin/main` would include every upstream commit landed since you branched, shown as if you had reverted them. `git diff $(git merge-base origin/main HEAD)` shows only your side. It includes uncommitted work, because "the whole branch" as a reviewer means it. Base branch name is configurable (`--base <ref>`, default `origin/main`); the skill does not fetch — run `git fetch` first if the base may be stale.
 - **commit** — one commit, for stepping through a history (`commit HEAD~3`, `commit <sha>`). The new side is the commit, not the working tree: the skeleton tells the agent to read files with `git show <sha>:<path>`, callers are found with `git grep` at that commit, and the snapshot is the commit itself. A root commit diffs against the empty tree.
-- Options: `--base <ref>` (branch mode), `--path DIR` (limit the diff and the caller search), `--exclude PATHSPEC` (repeatable), `--no-untracked` (§14), `--full-fn-max N` (default 150; 0 = always the full body), `--out PATH` (default `REVIEW_BRIEF.md` at the repo root, §9a), `--list` (extraction only, prints the unit table §7 — no prose), `--fresh` (ignore every earlier brief and the cache; §15), `--check` (preflight only), `--section PATH` (print one file's section), `--open` (start the viewer, §18).
+- Options: `--base <ref>` (branch mode), `--key <name>` (name the brief; §9a), `--path DIR` (limit the diff and the caller search), `--exclude PATHSPEC` (repeatable), `--no-untracked` (§14), `--full-fn-max N` (default 150; 0 = always the full body), `--out PATH` (default `<git dir>/pr-brief/<key>/pr-brief-<key>.md`, §9a), `--list` (extraction only, prints the unit table §7 — no prose), `--fresh` (ignore every earlier brief and the cache; §15), `--check` (preflight only), `--section PATH` (print one file's section), `--open` (start the viewer, §18).
 
 The brief file itself is always excluded from the diff (§6.1), otherwise the second run would describe the first.
 
@@ -61,11 +61,11 @@ Extract's first action, before touching git, is to verify its dependencies. Any 
 
 | check | how | on failure |
 |---|---|---|
-| `ast-grep` on `PATH` | `ast-grep --version` (the Homebrew formula installs both `ast-grep` and `sg`; check `ast-grep` first, `sg` second, and confirm `sg --version` mentions ast-grep — on Linux `sg` is also a setgroups utility) | `review-brief needs ast-grep. Install: brew install ast-grep  (or: npm i -g @ast-grep/cli, cargo install ast-grep)` |
+| `ast-grep` on `PATH` | `ast-grep --version` (the Homebrew formula installs both `ast-grep` and `sg`; check `ast-grep` first, `sg` second, and confirm `sg --version` mentions ast-grep — on Linux `sg` is also a setgroups utility) | `pr-brief needs ast-grep. Install: brew install ast-grep  (or: npm i -g @ast-grep/cli, cargo install ast-grep)` |
 | ast-grep minimum version | parse `--version`; minimum pinned during implementation to the version whose `scan --json` schema the rules were written against | `ast-grep <found> is too old; need >= <min>. brew upgrade ast-grep` |
-| `git` on `PATH` and inside a work tree | `git rev-parse --is-inside-work-tree` | `review-brief must be run inside a git repository` |
+| `git` on `PATH` and inside a work tree | `git rev-parse --is-inside-work-tree` | `pr-brief must be run inside a git repository` |
 | base ref resolves (branch mode) | `git rev-parse --verify <base>` | `<base> does not exist. Run git fetch, or pass --base <ref>` |
-| script runtime | whichever of `node` / `bun` the scripts target | `review-brief scripts need node >= <min>` |
+| script runtime | whichever of `node` / `bun` the scripts target | `pr-brief scripts need node >= <min>` |
 
 `extract --check` runs only the preflight and reports, so a user can verify a machine without generating anything.
 
@@ -82,11 +82,11 @@ git show <head>:<path> / worktree ┘         │
                                             ▼
                                    agent fills slots
                                             ▼
-                                   lint.(sh|ts) ─►  REVIEW_BRIEF.md
+                                   lint.(sh|ts) ─►  pr-brief-<key>.md
 ```
 
-- **extract** — deterministic. Runs preflight first (§4a; exit 2 on any missing dependency). Reads the existing `REVIEW_BRIEF.md` if present (§15), produces `units.json` (the fact table) and `skeleton.md` (the brief with slots either empty or pre-filled from the previous brief). This step never calls a model.
-- **agent** — reads `REVIEW_BRIEF.md`, the full new-side source of each changed file, and writes prose into slots. May read other files for context. May not edit anything outside a slot.
+- **extract** — deterministic. Runs preflight first (§4a; exit 2 on any missing dependency). Reads the existing brief if present (§15), produces `units.json` (the fact table) and `skeleton.md` (the brief with slots either empty or pre-filled from the previous brief). This step never calls a model.
+- **agent** — reads the brief, the full new-side source of each changed file, and writes prose into slots. May read other files for context. May not edit anything outside a slot.
 - **lint** — deterministic. Fails if any slot is empty, any heading was added/removed/reordered, or any word budget is exceeded. On failure the agent fixes and re-lints; the brief is not presented until lint passes.
 
 ## 6. Extraction algorithm
@@ -106,7 +106,7 @@ Also record file status from `git diff --name-status <range>`: `A` (added), `D` 
 
 Whitespace-only hunks are kept (they still change lines) but the unit is tagged `whitespace-only` if `git diff -w` produces no hunk for it.
 
-The output file (`REVIEW_BRIEF.md` or `--out`) is excluded via a pathspec (`-- . ':!REVIEW_BRIEF.md'`). On first run extract adds it to `.git/info/exclude` (local, never committed) so it stays out of `git status` too.
+The brief lives under the git directory (§9a), outside the tree, so it needs no exclusion. A brief written into the tree with `--out` is excluded via a pathspec (`-- . ':!<path>'`) and, on first run, added to `info/exclude` (local, never committed) so it stays out of `git status` too.
 
 ### 6.2 Symbol tables
 
@@ -241,7 +241,7 @@ Add `rules/<lang>/*.yml` and a line in the language→extension map. No other ch
 ## 9. Output format
 
 ````markdown
-# Review Brief — `<range>`
+# PR Brief — <key> · <range>          (the key names the brief, §9a: the branch as git spells it, a commit's short SHA, or --key; the range in words: working tree vs HEAD · branch vs <base> · entire tree · the commit's subject · git diff <args>)
 
 > - **Base** `<sha>` → **Head** `<sha>` [+ working tree]
 > - **Files** N changed (a added, m modified, d deleted[, r renamed][, u untracked]) · **Units** M (n new, m modified, d deleted, o other)
@@ -341,7 +341,11 @@ Rules:
 
 ### 9a. Output location
 
-`REVIEW_BRIEF.md` at the repository root. Rationale: a fixed, predictable name the reviewer opens by habit; a name unlikely to collide with anything a project already has (`REVIEW.md` is used by some repos for review guidelines); shouts what it is in a directory listing. It is regenerated on every run — it is a view, not a record. It is excluded from the diff (§6.1) and offered to `.git/info/exclude` so it never ends up in a commit. Extract prints one summary line to the terminal.
+Every brief lives under the repository's **common git directory** — `.git` in a plain checkout, the main repository's `.git` for a linked worktree, `.bare` beside the worktrees of a bare clone — at `pr-brief/<key>/pr-brief-<key>.md`, next to its own state (§14.1). Extract finds that directory with `git rev-parse --path-format=absolute --git-common-dir` (the relative form, resolved against the top level, on git < 2.31) and prints the absolute path it wrote.
+
+The **key** names the brief everywhere — its directory and file, the viewer's `/briefs/<key>` URL, the ref that pins its snapshot. A commit brief is keyed by the commit's short SHA (`git rev-parse --short=7`); any other brief by the branch it is on (the short SHA of HEAD when detached); `--key <name>` overrides both, for one brief standing for a whole stack. Keys are sanitised to `[A-Za-z0-9._-]` (a `/` in a branch name becomes `-`), so `adam/login` is `pr-brief-adam-login.md`.
+
+Rationale: a brief is per-repository tool state, and the git directory is where git and its neighbours (Graphite, git-lfs, git-svn) keep exactly that. It is never in the diff, never in `git status`, never committed or pushed; each branch or commit keeps its own brief, so a stack is a set of briefs side by side; the worktrees of one repository share the set, and removing a worktree does not remove its brief. The brief records the worktree it was generated from (`root:` in the front matter), so the viewer reads its files from the right checkout wherever it was started. It is regenerated on every run — it is a view, not a record. `--out PATH` still writes anywhere; a brief written into the tree is excluded from the diff (§6.1) and offered to `info/exclude` so it never ends up in a commit. Extract prints one summary line to the terminal.
 
 The brief, like a Graphite tour, is meant to be read top to bottom: summary → file purpose → file changes → functions.
 
@@ -378,10 +382,10 @@ Three levels, and a fixed order of work.
 | 2 | file order | path order | confirmed as starting point; revisit after use |
 | 3 | range | two named modes: `wip` (working tree vs HEAD) and `branch` (merge-base vs working tree); raw `git diff` args as escape hatch | see §4 on merge-base vs two-dot |
 | 4 | callers | **in v1**, computed by extract, shown as an immutable line under each function heading; `Context:` may reference it | name-based, labelled as such |
-| 5 | output | `REVIEW_BRIEF.md` at repo root, excluded from the diff, added to `.git/info/exclude`; one summary line to the terminal | §9a |
+| 5 | output | `<git dir>/pr-brief/<key>/pr-brief-<key>.md`, keyed by branch or short SHA, outside the tree; one summary line to the terminal naming the path. Was `PR_BRIEF.md` at the repo root until 2026-09-07 | §9a |
 | 6 | intent / "why" | allowed at file level (`Changes:`); at function level only as a trailing clause after the behavioral description | §10 |
 | 7 | file-level shape | `Context:` + `Changes:`, mirroring Graphite's upfront per-file blurb | §2a |
-| 8 | name | `review-brief` (skill), `REVIEW_BRIEF.md` (output) | "tour" is taken twice (Graphite, Diff Tours); "brief" = read before the review; distinct from /code-review output |
+| 8 | name | `pr-brief` (skill), `pr-brief-<key>.md` (output) | "tour" is taken twice (Graphite, Diff Tours); "brief" = read before the review; distinct from /code-review output |
 | 9 | slot labels | `File Context:` / `Changes:` on files; `<Kind> Context:` / `Changes:` on units, the word from the unit's kind (Function, Method, Class, Section, Key, Rule, …); deleted units' Context in past tense. Was Purpose:/Changes: until 2026-09-07 — the description is orientation for the reviewer, not the code's purpose, and the kind word tells them what they are reading | decided 2026-09-06; parser distinguishes by position; old labels still read |
 | 10 | links | every path and location is a relative Markdown link; the viewer opens the file read-only at the briefed version | decided 2026-09-06 |
 | 11 | summary block | blockquote of bullets with folded commit message and agent instructions | decided 2026-09-06 |
@@ -408,14 +412,14 @@ Three levels, and a fixed order of work.
 - **Type-resolved callers**: replace the name-based caller search (§6.5) with LSP or tsc/javac symbol resolution to remove false positives on common names.
 - ~~Rename detection~~ — implemented, see §12.
 - **`Why:` slot**, clearly separated from `Changes:`, sourced from commit messages when the range is committed.
-- **Reviewer marks**: `- [ ] ok` / `- [ ] flag` per unit, and a companion `/review-brief-flags` that hands flagged units back to the agent.
+- **Reviewer marks**: `- [ ] ok` / `- [ ] flag` per unit, and a companion `/pr-brief-flags` that hands flagged units back to the agent.
 - **More languages**: Zig, Rust, C — one rules directory each (Python and Go are done, §6.2a).
 - **Ordering by call graph** or entry points.
 
 ## 14. Skill layout
 
 ```
-review-brief/
+pr-brief/
   SKILL.md              # the five-step procedure the agent follows (§16)
   README.md             # for people
   sgconfig.yml          # ast-grep rule directories
@@ -427,6 +431,7 @@ review-brief/
     brief-format.ts     # the brief parser and budgets shared by extract and lint
     viewer.ts           # localhost server for the bundled editor (§18)
     selftest.sh         # fixture-based regression test
+    e2e.mjs             # fixture-based browser test of the viewer (§18); optional, needs Playwright
   rules/<lang>/units.yml   # typescript (+ units-tsx.yml), javascript, java, python, kotlin, go, lua, bash, html, css, yaml, markdown
   references/
     spec.md             # this document
@@ -436,18 +441,22 @@ review-brief/
 
 ### 14.1 State (implementation)
 
-Everything the pipeline keeps between runs lives under `.git/review-brief/`, so it is never in the diff, never in `git status`, and never committed:
+Everything the pipeline keeps between runs lives under `<common git dir>/pr-brief/` (§9a), so it is never in the diff, never in `git status`, and never committed. Each brief has its own directory, named by its key:
 
 | file | written by | purpose |
 |---|---|---|
-| `units.json` | extract | the fact table + expected headings + slot lock list; read by lint |
-| `skeleton.md` | extract | copy of the skeleton as written |
-| `previous.md` | extract | the brief that was on disk before this run |
-| `last-<mode>.md` | lint | the last lint-clean brief per mode (`wip`, `branch`, `all`, `commit`, `raw`) |
-| `cache.json` | lint | `id@hash → slots` for every unit ever described, `path@hash → purpose` per file, and for commit-mode briefs `overview@commit@<sha>` and `path@commit@<sha> → changes/review` |
-| `refs/review-brief/previous` | extract | snapshot of the tree the last brief was generated from (`git stash create` when dirty), for the since-last hunk |
+| `<key>/pr-brief-<key>.md` | extract, agent, lint | the brief itself |
+| `<key>/units.json` | extract | the fact table + expected headings + slot lock list, plus the brief's path, key and worktree; read by lint |
+| `<key>/skeleton.md` | extract | copy of the skeleton as written |
+| `<key>/previous.md` | extract | the brief that was on disk before this run |
+| `<key>/last.md` | lint | the last lint-clean version of this brief |
+| `last` | extract | the key of the brief written last: what `lint.ts` checks when given neither a path nor a key |
+| `cache.json` | lint | shared by every brief of the repository: `id@hash → slots` for every unit ever described, `path@hash → purpose` per file, and for commit-mode briefs `overview@commit@<sha>` and `path@commit@<sha> → changes/review` |
+| `refs/pr-brief/<key>` | extract | snapshot of the tree the brief was last generated from (`git stash create` when dirty), for the since-last hunk |
 
-Carry-over sources, in priority: the brief on disk (if same mode), the same-mode archive, the other-mode archives, then `cache.json`; a source whose slots are still tokens (a skeleton regenerated before it was filled) is skipped. A unit whose body hash matches any source takes that source's prose. Consequences: switching `wip` ↔ `branch` costs nothing for units already described in either; reverting code to a previously described state costs nothing; file-level `Changes:` and `Notes:` come only from the primary source (they depend on which units are in the range), `Context:` from any.
+A repository briefed by an earlier version is migrated on the next run: `.git/review-brief/` is renamed to `pr-brief/`; a `PR_BRIEF.md` or `REVIEW_BRIEF.md` at the repository root moves under its key (the current branch, or the commit it describes) and its line leaves `info/exclude`; `commits/<sha>/PR_BRIEF.md` briefs move to `<sha>/pr-brief-<sha>.md`; the shared `units.json`, `skeleton.md` and `previous.md` are removed and the single snapshot ref dropped. The per-mode archives `last-<mode>.md` stay where they are and still feed carry-over. Readers accept both front-matter keys, so nothing is lost.
+
+Carry-over sources, in priority: the brief on disk (if same mode), the key's `last.md`, the pre-key per-mode archives, then `cache.json`; a source whose slots are still tokens (a skeleton regenerated before it was filled) is skipped. A unit whose body hash matches any source takes that source's prose. Consequences: switching `wip` ↔ `branch` costs nothing for units already described in either; reverting code to a previously described state costs nothing; file-level `Changes:` and `Notes:` come only from the primary source (they depend on which units are in the range), `Context:` from any.
 
 Other implementation facts: overloads (two symbols with the same scope, name and kind on either side of the diff) carry their parameter list in the unit id, `Svc.save(Order o, boolean force)`, so each overload is its own unit; a container-only unit is hashed on its own changed lines only, so editing a member does not invalidate the container's prose; TS overload and `declare` signatures and abstract methods are units of their own; in working-tree modes (wip, branch, all, raw without `--staged`) untracked files are briefed as additions, `.gitignore` respected, unless `--no-untracked` is given; their since-last hunk is never available because `git stash create` cannot snapshot them; slot instructions never contain `>` (`›` is substituted) so `<<rb:… | …>>` is always delimited by the first `>>`; `other` units are bullets under `**Other changes:**` with their marker on the preceding line and their one-line slot after ` — `; a unit's `signature` is its whole declaration (annotation-only lines dropped, continuation lines joined) cut at the first `{`, `=>`, or `;`, so a changed parameter on a wrapped line is a signature change; comment lines directly above a declaration belong to it, not to the enclosing type; a type is *container-only* when its members are units in the same brief, whatever its kind; all import hunks of a file form one `path#(imports)` unit; the summary block is a blockquote of bullets (Base → Head, Files/Units, Commit, Signature changes, Renamed, Since last brief) followed by folded `<details>` blocks for a commit message longer than three lines and for the agent instructions (the read-these file list and the style line), so a reader sees one fact per line and the agent-only text stays collapsed on GitHub and in the viewer.
 
@@ -465,11 +474,13 @@ A side benefit: the heading badges let the reviewer skip straight to what change
 
 ### 15.1 What is recorded
 
-**Front matter** at the top of `REVIEW_BRIEF.md`:
+**Front matter** at the top of the brief:
 
 ```yaml
 ---
-review-brief: 1            # format version
+pr-brief: 1            # format version
+key: <key>                # the brief's name everywhere (§9a)
+root: <abs path>          # the worktree it was generated from; the viewer reads files there
 mode: wip | branch | all | commit | raw
 base: <sha>               # HEAD (wip), merge-base (branch), the empty tree (all), the parent (commit)
 head: <sha>               # HEAD at generation
@@ -482,7 +493,7 @@ previous:                 # from the brief this one was built from, or null
 ---
 ```
 
-`snapshot` is what makes "since last" work when the working tree is dirty: `HEAD` has not moved, but the code has. Extract creates it with `git stash create` (a commit object, no change to the tree or index; when the tree is clean it is simply `HEAD`) and pins it under `refs/review-brief/previous` so garbage collection cannot prune it. Only the latest snapshot is pinned; the previous ref is overwritten on each run.
+`snapshot` is what makes "since last" work when the working tree is dirty: `HEAD` has not moved, but the code has. Extract creates it with `git stash create` (a commit object, no change to the tree or index; when the tree is clean it is simply `HEAD`) and pins it under `refs/pr-brief/<key>` so garbage collection cannot prune it. Only the latest snapshot is pinned; the previous ref is overwritten on each run.
 
 **Per-section markers**, HTML comments immediately under each file and unit heading. Invisible when rendered; parsed by extract and checked by lint.
 
@@ -527,7 +538,7 @@ The reviewer's summary line becomes:
 
 ### 15.3 Carry-over rules
 
-Extract reads the existing `REVIEW_BRIEF.md` (if present and its front matter parses) before writing the skeleton. For each unit in the new fact table:
+Extract reads the existing brief (if present and its front matter parses) before writing the skeleton. For each unit in the new fact table:
 
 | previous state | new state | result |
 |---|---|---|
@@ -561,7 +572,7 @@ Every file section and unit entry has an optional slot the agent never writes:
 
 Carry-over: always, verbatim, keyed by `id`. If the unit's hash changed since the note was written, the note is kept and prefixed with `*(code changed since this note)*`. Notes on removed units are collected under a final `## Orphaned notes` section rather than deleted. Lint treats `Notes:` as opaque: no budget, no requirement, but it must not be altered by the agent (lint compares against the previous brief).
 
-A later companion (`/review-brief-flags`, §13) can hand every `Notes:` and unchecked `- [ ]` back to the agent as a work list.
+A later companion (`/pr-brief-flags`, §13) can hand every `Notes:` and unchecked `- [ ]` back to the agent as a work list.
 
 ### 15.5 Range changes
 
@@ -627,28 +638,30 @@ The loop is: run lint → do exactly what each line says → run lint. Nothing e
 
 ### 16.5 Triggering
 
-The skill description is precise about when it applies (*"produce or update REVIEW_BRIEF.md for the current changes"*) and when it does not (*not for finding bugs — that is /code-review*), so it neither fires on the wrong request nor leaves the agent unsure whether to run it.
+The skill description is precise about when it applies (*"produce or update a PR brief for the current changes"*) and when it does not (*not for finding bugs — that is /code-review*), so it neither fires on the wrong request nor leaves the agent unsure whether to run it.
 
 ### 16.6 Test
 
-A fixture repository with a known branch, a golden `units.json`, and a golden lint result. The eval runs `/review-brief branch` end to end and passes when: preflight passes, extract's unit table equals the golden, the agent reaches lint-clean without asking a question or running any command not in SKILL.md, and a second run on the unchanged fixture writes zero new prose. A second fixture with three added and three modified files checks that exactly those units are re-narrated.
+A fixture repository with a known branch, a golden `units.json`, and a golden lint result. The eval runs `/pr-brief branch` end to end and passes when: preflight passes, extract's unit table equals the golden, the agent reaches lint-clean without asking a question or running any command not in SKILL.md, and a second run on the unchanged fixture writes zero new prose. A second fixture with three added and three modified files checks that exactly those units are re-narrated.
 
 ## 18. Viewer (brief mode in xor)
 
-The skill bundles xor, the editor (`viewer/`, developed in place; there is no other copy). The editor has a **brief mode** that activates for any document whose front matter starts `review-brief:`. The agent never uses it; it is the reviewer's surface.
+The skill bundles xor, the editor (`viewer/`, developed in place; there is no other copy). The editor has a **brief mode** that activates for any document whose front matter starts `pr-brief:`. The agent never uses it; it is the reviewer's surface.
 
 ### 18.1 How the brief reaches the editor
 
-`extract --open` starts `scripts/viewer.ts`, a zero-dependency localhost server on the fixed port 8790, and opens `http://127.0.0.1:8790/?brief=/brief`. One server per machine: a second start hands its brief (and repository root) to the running one through `/switch` and exits, so the open tab follows. `--verbose` logs requests; `--stop` asks the running server to exit. The server serves `viewer/` statically (no-store) and exposes:
+`extract --open` starts `scripts/viewer.ts`, a zero-dependency localhost server on the fixed port 8790, and opens `http://127.0.0.1:8790/?brief=/briefs/<slug>`. One server per machine: a second start hands its brief (and repository root) to the running one through `/switch` and exits; the running server adds it to the set it serves and makes it current, and the open tab lists it and follows. Several briefs are served at once: every brief under a repository's state directory (`<common git dir>/pr-brief/<key>/pr-brief-<key>.md`, §9a) joins the set at `/briefs/<key>`, and each reads its files from the worktree recorded in its front matter. `--verbose` logs requests; `--stop` asks the running server to exit. The server serves `viewer/` statically (no-store) and exposes:
 
 | route | does |
 |---|---|
 | `GET /brief` | current file content |
 | `GET /brief/meta` | `{ path, name, mtime, viewer }` — `viewer` is the served app's build id; the editor reloads itself when it changes |
 | `GET /events` | server-sent events: a `meta` frame (same JSON) on connect and whenever the brief file is rewritten, `/switch` changes the served brief, or `sw.js` is re-stamped. Open tabs hold one connection each and never poll; a dropped connection reconnects and gets the current meta again |
-| `PUT /brief` | replaces the file; refused (422) unless the body starts with `review-brief:` front matter |
-| `GET /file?path=` | a repository file as the brief sees it (the commit in commit mode, else the working tree, falling back to head then base), with its `symbols` for the outline |
-| `POST /switch` | `{ path, root }` — serve another brief; localhost only |
+| `PUT /brief` | replaces the file; refused (422) unless the body starts with `pr-brief:` front matter |
+| `GET /file?path=&brief=` | a repository file as that brief sees it (the commit in commit mode, else the working tree, falling back to head then base), with its `symbols` for the outline; `brief` names the served brief (its commit, its repository), default the current one |
+| `GET /briefs` | every served brief: `{ slug, url, path, name, mtime, repo, root }`; a stored brief's slug is its key, `root` the worktree it was generated from |
+| `GET /briefs/<slug>`, `PUT /briefs/<slug>`, `GET /briefs/<slug>/meta` | one served brief, as `/brief` and `/brief/meta` are for the current one; the `meta` frame carries `current` and the `briefs` list |
+| `POST /switch` | `{ path, root }` — add a brief (or find it) and make it current; localhost only |
 | `POST /stop` | exit; localhost only |
 
 The editor opens `?brief=` as a **remote document** (`{ remote: url, mtime }`): `:w` PUTs, `:rel` GETs. A brief opened from disk through the File System Access API (drag, ⌘O, OS "open with") behaves the same through its handle. The file on disk is the only truth; the editor's IndexedDB copy is a cache.
@@ -666,7 +679,7 @@ The agent rewrites the brief on every extract run; the reviewer edits it in the 
 - **Copy as PR comment**: `:copy` (palette: *Brief: copy this unit as a PR comment*) or the copy icon on a unit heading in the preview writes the unit to the clipboard as Markdown and as HTML (one `ClipboardItem`, so a rich comment box keeps links and emphasis): the location line — `path:start-end`, linked to `<repo>/blob/<head>/<path>#Lstart-Lend` when the brief is in commit mode or the worktree is clean and the server found an origin remote — then the reviewer's `Notes:` with Context and Changes folded in a `<details>` under them, or Context and Changes unfolded when there are no Notes. `GET /brief/meta` and the `meta` event carry `repo` (the origin remote as a web URL, or null).
 - **Scroll-spy**: in preview view, or in split view while the preview is the pane being scrolled, the outline highlight and the status follow the unit under the sticky file heading. Each unit renders in a `div.rb-unit` wrapper and each file in `section.rb-file`; both carry `data-spy-line` and tile the document, so an IntersectionObserver over a 2px band under the sticky heading knows exactly which one is being read without measuring on scroll. When the editor is the pane being scrolled, the cursor drives the outline as before.
 - **Long briefs**: file cards use `content-visibility: auto` with a per-card size estimate (≈57px per block, hunks folded), so a 300-unit brief lays out only the cards near the viewport. Geometry inside a skipped card is not available: the preview uses the card's top for such blocks when mapping scroll positions, and forces a card visible for one frame before jumping into it (outline click, scroll sync, anchor link).
-- **Sidebar**: the Open list (documents in the editor, × closes copies without confirmation, ⊗ closes the other opened files) above the Outline — the brief's files and units, or a source file's symbols with a `brief` badge on those that are units in the brief (§6.5b).
+- **Sidebar**: the Open list (documents in the editor: every brief the server serves, so a series of commit briefs reads as a stack, plus the files jumped into; × closes a copy without confirmation and a closed brief stays closed for the page; ⊗ closes the opened files and keeps the briefs) above the Outline — the brief's files and units, or a source file's symbols with a `brief` badge on those that are units in the brief (§6.5b).
 - **Preview**: front matter hidden; the summary block's folds; each file a card with a sticky heading and a status pill; hunks colourised in the file's language, unified or side by side (`:set diff=split`); every path a link that opens the file read-only at the briefed version in a new tab or in place (browser back restores the reader's position).
 
 ### 18.4 What the editor relies on (format contract)

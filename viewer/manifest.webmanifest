@@ -2,7 +2,7 @@
   "id": "./",
   "name": "xor",
   "short_name": "xor",
-  "description": "xor: an offline-first Markdown and code editor with a review-brief mode, vim mode, color schemes and live preview.",
+  "description": "xor: an offline-first Markdown and code editor with a pr-brief mode, vim mode, color schemes and live preview.",
   "start_url": "./?source=pwa",
   "scope": "./",
   "display": "standalone",

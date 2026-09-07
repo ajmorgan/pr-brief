@@ -6,8 +6,10 @@ set -euo pipefail
 sedi() { if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@"; fi; }
 SK="$(cd "$(dirname "$0")/.." && pwd)"
 FX="$(mktemp -d)/fixture"
-mkdir -p "$FX/src" && cd "$FX"
+mkdir -p "$FX/src" && cd "$FX" && FX="$(pwd -P)"   # real path: git reports real paths, and the checks below compare them
 git init -q -b main && git config user.email t@t && git config user.name t
+# every brief lives under the repository's git directory, keyed by branch (or a commit's short SHA)
+BRIEF="$FX/.git/pr-brief/main/pr-brief-main.md"
 
 cat > src/Svc.java <<'EOF'
 public class Svc {
@@ -195,35 +197,54 @@ git -C "$FX" checkout -q -- lang && git -C "$FX" rm -rq lang && git -C "$FX" com
 # round trip below exercises carry-over on real units
 cp "$FX/../src-edited/"* "$FX/src/" && cp "$FX/../app.yaml-edited" "$FX/app.yaml"
 fill() { node -e '
-const fs=require("fs"); let t=fs.readFileSync("REVIEW_BRIEF.md","utf8");
+const fs=require("fs"); const B=process.argv[1]; let t=fs.readFileSync(B,"utf8");
 t=t.replace(/<<rb:changes [^|]*\| [^\n]*?Must name every unit below: ([^\n]*?)>>/g,(m,names)=>"Touches "+names.split(", ").map(n=>"`"+n+"`").join(", ")+".");
 t=t.replace(/<<rb:[^\n]*?>>/g,"placeholder text.");
-fs.writeFileSync("REVIEW_BRIEF.md",t);'; }
+fs.writeFileSync(B,t);' "${1:-$BRIEF}"; }
 # skeleton + lint round trip: fill every slot mechanically, lint must pass
-node "$SK/scripts/extract.ts" >/dev/null
+out="$(node "$SK/scripts/extract.ts")"
+case "$out" in "wrote $BRIEF:"*) ;; *) echo "FAIL: brief not written under the git directory by key: $out"; exit 1 ;; esac
+[ -f "$BRIEF" ] && [ ! -f PR_BRIEF.md ] || { echo "FAIL: brief missing or written into the working tree"; exit 1; }
+[ -f .git/pr-brief/main/units.json ] && [ "$(cat .git/pr-brief/last)" = main ] || { echo "FAIL: per-key state or the last-key marker missing"; exit 1; }
 fill
 node "$SK/scripts/lint.ts" || { echo "FAIL: lint did not pass on a fully filled brief"; exit 1; }
 # second run must carry everything over — and there must be units to carry
 out="$(node "$SK/scripts/extract.ts")"
 case "$out" in *"0 slots to fill"*"units carried over)"*) ;; *) echo "FAIL: rerun did not carry over: $out"; exit 1 ;; esac
+# a repository last briefed under the old name and layout (review-brief; REVIEW_BRIEF.md at the root, one shared
+# state): state dir, brief file and exclude line are migrated once, the snapshot ref becomes per key, prose intact
+mv "$BRIEF" REVIEW_BRIEF.md && sedi '2s/^pr-brief:/review-brief:/' REVIEW_BRIEF.md
+mv .git/pr-brief/main/units.json .git/pr-brief/units.json && rm -rf .git/pr-brief/main .git/pr-brief/last && mv .git/pr-brief .git/review-brief
+git update-ref refs/review-brief/previous HEAD && git update-ref -d refs/pr-brief/main && printf "REVIEW_BRIEF.md\n" >> .git/info/exclude
+out="$(node "$SK/scripts/extract.ts")"
+[ -d .git/pr-brief ] && [ ! -d .git/review-brief ] && [ -f "$BRIEF" ] && [ ! -f REVIEW_BRIEF.md ] || { echo "FAIL: old-name state was not migrated"; exit 1; }
+[ ! -f .git/pr-brief/units.json ] || { echo "FAIL: shared state from before keys survived"; exit 1; }
+grep -qx "REVIEW_BRIEF.md" .git/info/exclude && { echo "FAIL: stale exclude line survived the migration"; exit 1; }
+git rev-parse -q --verify refs/pr-brief/main >/dev/null && ! git rev-parse -q --verify refs/review-brief/previous >/dev/null || { echo "FAIL: snapshot ref is not per key"; exit 1; }
+case "$out" in *"0 slots to fill"*"units carried over)"*) ;; *) echo "FAIL: migration lost the carry-over: $out"; exit 1 ;; esac
+# the previous layout's root file, PR_BRIEF.md, moves the same way
+mv "$BRIEF" PR_BRIEF.md && printf "PR_BRIEF.md\n" >> .git/info/exclude
+node "$SK/scripts/extract.ts" >/dev/null
+[ -f "$BRIEF" ] && [ ! -f PR_BRIEF.md ] || { echo "FAIL: a root PR_BRIEF.md was not moved under its key"; exit 1; }
+grep -qx "PR_BRIEF.md" .git/info/exclude && { echo "FAIL: stale PR_BRIEF.md exclude line survived"; exit 1; }
 # reviewer notes: one on a unit whose body then changes (kept, marked stale), one on a unit that then
 # disappears (orphaned, never dropped); a since-last hunk containing --> must not break note stripping
 node -e '
-const fs=require("fs"); let t=fs.readFileSync("REVIEW_BRIEF.md","utf8");
+const fs=require("fs"); const B=process.argv[1]; let t=fs.readFileSync(B,"utf8");
 const note=(id,text)=>{ const m=t.indexOf("<!-- rb:unit id=\""+id+"\""); if(m<0) throw new Error("unit missing "+id); const eol=t.indexOf("\n",m); t=t.slice(0,eol+1)+"\n**Notes:** "+text+"\n"+t.slice(eol+1); };
 note("src/parse.ts#parseConfig","keep me"); note("src/parse.ts#Loader.size","gone note");
-fs.writeFileSync("REVIEW_BRIEF.md",t);'
+fs.writeFileSync(B,t);' "$BRIEF"
 sedi 's/throw new Error("missing")/throw new Error("absent")/; /size(): number/d' src/parse.ts
 sedi 's/validate(o);/validate(o); String tag = "<!-- x -->";/' src/Svc.java
 node "$SK/scripts/extract.ts" >/dev/null
-grep -q 'keep me' REVIEW_BRIEF.md || { echo "FAIL: note on an edited unit was dropped"; exit 1; }
-grep -q '^## Orphaned notes' REVIEW_BRIEF.md && grep -q 'gone note' REVIEW_BRIEF.md || { echo "FAIL: note on a removed unit was not orphaned"; exit 1; }
-grep -q '<!-- rb:revise' REVIEW_BRIEF.md || { echo "FAIL: no revise note for the edited unit"; exit 1; }
+grep -q 'keep me' "$BRIEF" || { echo "FAIL: note on an edited unit was dropped"; exit 1; }
+grep -q '^## Orphaned notes' "$BRIEF" && grep -q 'gone note' "$BRIEF" || { echo "FAIL: note on a removed unit was not orphaned"; exit 1; }
+grep -q '<!-- rb:revise' "$BRIEF" || { echo "FAIL: no revise note for the edited unit"; exit 1; }
 fill
 node "$SK/scripts/lint.ts" || { echo "FAIL: lint failed with notes and an orphaned-notes section"; exit 1; }
-grep -q 'rb:revise' REVIEW_BRIEF.md && { echo "FAIL: revise notes survived lint"; exit 1; }
-grep -q '^-->' REVIEW_BRIEF.md && { echo "FAIL: a stray --> survived note stripping"; exit 1; }
-grep -q 'keep me' REVIEW_BRIEF.md || { echo "FAIL: note lost by lint"; exit 1; }
+grep -q 'rb:revise' "$BRIEF" && { echo "FAIL: revise notes survived lint"; exit 1; }
+grep -q '^-->' "$BRIEF" && { echo "FAIL: a stray --> survived note stripping"; exit 1; }
+grep -q 'keep me' "$BRIEF" || { echo "FAIL: note lost by lint"; exit 1; }
 git -C "$FX" checkout -q -- src app.yaml && rm -f "$FX/src/fresh.ts"
 
 # --- overloads, a renamed method, commit mode ---------------------------------------------
@@ -254,4 +275,26 @@ actual4="$(node "$SK/scripts/extract.ts" commit HEAD --list --path src/Over.java
 if [ "$actual4" != "$expected3" ]; then
   echo "FAIL: commit-mode unit table differs from wip"; echo "--- expected"; echo "$expected3"; echo "--- actual"; echo "$actual4"; exit 1
 fi
+# a commit brief is keyed by the commit's short SHA; one left by the previous layout (commits/<sha>/PR_BRIEF.md) moves under its key
+sha="$(git rev-parse --short=7 HEAD)"
+mkdir -p ".git/pr-brief/commits/$sha" && printf -- '---\npr-brief: 1\nmode: commit\n---\n# PR Brief — legacy\n' > ".git/pr-brief/commits/$sha/PR_BRIEF.md"
+out="$(node "$SK/scripts/extract.ts" commit HEAD --path src/Over.java)"
+case "$out" in "wrote $FX/.git/pr-brief/$sha/pr-brief-$sha.md:"*) ;; *) echo "FAIL: commit brief not keyed by its short SHA: $out"; exit 1 ;; esac
+[ ! -d .git/pr-brief/commits ] || { echo "FAIL: the legacy commits/ layout survived"; exit 1; }
+[ -f ".git/pr-brief/$sha/previous.md" ] || { echo "FAIL: the legacy commit brief was not moved under its key"; exit 1; }
+# --key names the brief yourself (one brief standing for a whole stack)
+out="$(node "$SK/scripts/extract.ts" --key "my stack/v2" --path src/Over.java)"
+case "$out" in "wrote $FX/.git/pr-brief/my-stack-v2/pr-brief-my-stack-v2.md:"*) ;; *) echo "FAIL: --key not sanitised into the brief's name: $out"; exit 1 ;; esac
+
+# --- worktrees: state lives under the common git directory ------------------------------------
+# a linked worktree: its .git is a file pointing into the main repository's .git, which is where the brief goes
+WT="$(dirname "$FX")/wt" && git worktree add -q -b wt-branch "$WT" HEAD
+( cd "$WT" && sedi 's/repo.put(o);/repo.put(o); touched();/' src/Over.java && out="$(node "$SK/scripts/extract.ts")" &&
+  case "$out" in "wrote $FX/.git/pr-brief/wt-branch/pr-brief-wt-branch.md:"*) ;; *) echo "FAIL: worktree brief not under the main repository's .git: $out"; exit 1 ;; esac &&
+  grep -q "^root: $WT\$" "$FX/.git/pr-brief/wt-branch/pr-brief-wt-branch.md" || { echo "FAIL: worktree brief does not record its worktree"; exit 1; } ) || exit 1
+# a bare repository with worktrees beside it: no .git directory anywhere; state goes to .bare/pr-brief/
+B="$(dirname "$FX")/bare" && mkdir -p "$B" && git clone -q --bare "$FX" "$B/.bare" && printf 'gitdir: ./.bare\n' > "$B/.git" && git -C "$B" worktree add -q -b feat feat HEAD 2>/dev/null
+( cd "$B/feat" && sedi 's/repo.put(o);/repo.put(o); touched();/' src/Over.java && out="$(node "$SK/scripts/extract.ts")" &&
+  case "$out" in "wrote $B/.bare/pr-brief/feat/pr-brief-feat.md:"*) ;; *) echo "FAIL: bare-layout brief not under .bare: $out"; exit 1 ;; esac &&
+  fill "$B/.bare/pr-brief/feat/pr-brief-feat.md" && node "$SK/scripts/lint.ts" >/dev/null || { echo "FAIL: lint did not find the brief from a bare-layout worktree"; exit 1; } ) || exit 1
 echo "selftest ok ($FX)"

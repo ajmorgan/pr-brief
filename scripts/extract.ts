@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// extract.ts — the deterministic half of review-brief (spec §4a–§9, §15).
+// extract.ts — the deterministic half of pr-brief (spec §4a–§9, §15).
 // Computes changed files and units from git + ast-grep, carries prose over
-// from the previous brief, and writes REVIEW_BRIEF.md as a skeleton with
+// from the previous brief, and writes PR_BRIEF.md as a skeleton with
 // slot tokens for the agent to fill. Never calls a model.
 //
 // Exit codes: 0 ok · 1 usage/runtime error · 2 preflight failure (missing tool)
@@ -20,10 +20,9 @@ const SG_MIN = [0, 30, 0];
 const NODE_MIN = 22;
 const CALLER_CAP = 20;
 const TYPE_KINDS = new Set(["class", "interface", "enum", "record", "annotation", "type", "object"]);
-const DEFAULT_OUT = "REVIEW_BRIEF.md";
 const DEFAULT_BASE = "origin/main";
 const DEFAULT_FULL_FN_MAX = 150; // full-body diff up to this many lines, or when a third of the body changed; 0 = always
-const STATE_DIR = "review-brief"; // under .git/
+const STATE_DIR = "pr-brief"; // under the repository's common git directory: .git, or .bare beside worktrees
 
 // ---------------------------------------------------------------- types
 
@@ -52,7 +51,7 @@ interface FileEntry {
 }
 interface Args {
   mode: "wip" | "branch" | "all" | "commit" | "raw"; raw: string[]; base: string; commit: string; fullFnMax: number;
-  out: string; list: boolean; fresh: boolean; check: boolean; section: string | null; scope: string; open: boolean; exclude: string[];
+  out: string | null; key: string | null; list: boolean; fresh: boolean; check: boolean; section: string | null; scope: string; open: boolean; exclude: string[];
   untracked: boolean; // working-tree modes also brief untracked files (respecting .gitignore)
 }
 
@@ -66,6 +65,19 @@ function sha(s: string): string {
   return crypto.createHash("sha256").update(s).digest("hex").slice(0, 16);
 }
 let ROOT = process.cwd();
+let GIT_COMMON = ""; // the shared git directory: .git in a plain checkout, the main .git for a linked worktree, .bare beside worktrees
+// git follows the gitdir pointer in a worktree's .git file and the commondir pointer inside it; the absolute form needs git >= 2.31
+function gitCommonDir(): string {
+  const abs = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: ROOT, encoding: "utf8" });
+  if (abs.status === 0) return abs.stdout.trim();
+  return path.resolve(ROOT, execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: ROOT, encoding: "utf8" }).trim());
+}
+// The key names a brief everywhere: its directory and file under the state root, its URL in the viewer,
+// the ref that keeps its snapshot alive. Safe as a path segment and as a ref name.
+function keyOf(s: string): string {
+  const k = s.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/\.{2,}/g, ".").replace(/^[-.]+|[-.]+$/g, "").replace(/\.lock$/, "");
+  return k || "brief";
+}
 let SCOPE = ".";
 function git(args: string[], opts: { ok?: boolean; input?: string } = {}): string {
   const r = spawnSync("git", ["-c", "core.quotePath=false", ...args], { cwd: ROOT, encoding: "utf8", maxBuffer: 1 << 28, input: opts.input });
@@ -102,7 +114,7 @@ function langOf(p: string): string | null {
 // ---------------------------------------------------------------- args
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { mode: "wip", raw: [], base: DEFAULT_BASE, commit: "HEAD", fullFnMax: DEFAULT_FULL_FN_MAX, out: DEFAULT_OUT, list: false, fresh: false, check: false, section: null, scope: ".", open: false, exclude: [], untracked: true };
+  const a: Args = { mode: "wip", raw: [], base: DEFAULT_BASE, commit: "HEAD", fullFnMax: DEFAULT_FULL_FN_MAX, out: null, key: null, list: false, fresh: false, check: false, section: null, scope: ".", open: false, exclude: [], untracked: true };
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
     if (x === "--") { a.mode = "raw"; a.raw = argv.slice(i + 1); break; }
@@ -111,6 +123,7 @@ function parseArgs(argv: string[]): Args {
     else if (x === "--base") a.base = argv[++i];
     else if (x === "--full-fn-max") a.fullFnMax = parseInt(argv[++i], 10);
     else if (x === "--out") a.out = argv[++i];
+    else if (x === "--key") a.key = argv[++i];
     else if (x === "--list") a.list = true;
     else if (x === "--fresh") a.fresh = true;
     else if (x === "--check") a.check = true;
@@ -124,7 +137,7 @@ function parseArgs(argv: string[]): Args {
   }
   return a;
 }
-const USAGE = `usage: extract.ts [wip|branch|all|commit <ref>] [--base <ref>] [--full-fn-max N (default 150; 0 = always full body)] [--out PATH] [--list] [--fresh] [--check] [--section PATH] [--path DIR] [--exclude PATHSPEC]... [--no-untracked] [--open]
+const USAGE = `usage: extract.ts [wip|branch|all|commit <ref>] [--base <ref>] [--full-fn-max N (default 150; 0 = always full body)] [--out PATH] [--key NAME] [--list] [--fresh] [--check] [--section PATH] [--path DIR] [--exclude PATHSPEC]... [--no-untracked] [--open]
        extract.ts -- <git diff args>
 `;
 
@@ -132,7 +145,7 @@ const USAGE = `usage: extract.ts [wip|branch|all|commit <ref>] [--base <ref>] [-
 
 function preflight(a: Args): { sg: string } {
   const nodeMajor = parseInt(process.versions.node.split(".")[0], 10);
-  if (nodeMajor < NODE_MIN) die(`review-brief scripts need node >= ${NODE_MIN} (found ${process.versions.node}).`, 2);
+  if (nodeMajor < NODE_MIN) die(`pr-brief scripts need node >= ${NODE_MIN} (found ${process.versions.node}).`, 2);
 
   let sg: string | null = null;
   let ver = "";
@@ -140,7 +153,7 @@ function preflight(a: Args): { sg: string } {
     const r = spawnSync(cand, ["--version"], { encoding: "utf8" });
     if (r.status === 0 && /ast-grep/.test(r.stdout)) { sg = cand; ver = r.stdout.trim(); break; }
   }
-  if (!sg) die(`review-brief needs ast-grep, which is not installed.\nInstall: brew install ast-grep\n   (or: npm i -g @ast-grep/cli, cargo install ast-grep)`, 2);
+  if (!sg) die(`pr-brief needs ast-grep, which is not installed.\nInstall: brew install ast-grep\n   (or: npm i -g @ast-grep/cli, cargo install ast-grep)`, 2);
   const vm = ver.match(/(\d+)\.(\d+)\.(\d+)/);
   if (vm) {
     const v = [+vm[1], +vm[2], +vm[3]];
@@ -149,8 +162,9 @@ function preflight(a: Args): { sg: string } {
   }
 
   const inTree = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
-  if (inTree.status !== 0 || !/true/.test(inTree.stdout)) die(`review-brief must be run inside a git repository.`, 2);
+  if (inTree.status !== 0 || !/true/.test(inTree.stdout)) die(`pr-brief must be run inside a git repository.`, 2);
   ROOT = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+  GIT_COMMON = gitCommonDir();
 
   if (a.mode === "branch" && gitOk(["rev-parse", "--verify", "--quiet", a.base]) === null)
     die(`${a.base} does not exist. Run git fetch, or pass --base <ref>.`, 2);
@@ -165,10 +179,10 @@ interface RangeInfo { diffArgs: string[]; base: string; head: string; newSide: "
 
 function resolveRange(a: Args): RangeInfo {
   const head = git(["rev-parse", "HEAD"]).trim();
-  if (a.mode === "wip") return { diffArgs: ["HEAD"], base: head, head, newSide: "worktree", label: "wip" };
+  if (a.mode === "wip") return { diffArgs: ["HEAD"], base: head, head, newSide: "worktree", label: "working tree vs HEAD" };
   if (a.mode === "all") {
     const empty = git(["hash-object", "-t", "tree", "/dev/null"]).trim(); // the empty tree
-    return { diffArgs: [empty], base: empty, head, newSide: "worktree", label: "all (entire tree)" };
+    return { diffArgs: [empty], base: empty, head, newSide: "worktree", label: "entire tree" };
   }
   if (a.mode === "commit") {
     // one commit: its parent (or the empty tree for a root commit) → the commit itself
@@ -176,27 +190,27 @@ function resolveRange(a: Args): RangeInfo {
     const parent = gitOk(["rev-parse", "--verify", "--quiet", `${c}^`])?.trim() || git(["hash-object", "-t", "tree", "/dev/null"]).trim();
     const [subject, author, date, ...bodyLines] = git(["log", "-1", "--format=%s%n%an%n%as%n%b", c]).split("\n");
     const body = bodyLines.filter((l) => !/^(Signed-off-by|Co-authored-by|Reviewed-by|Change-Id):/i.test(l)).join("\n").trim();
-    return { diffArgs: [parent, c], base: parent, head: c, newSide: c, label: `commit ${c.slice(0, 7)} — ${subject}`, commit: { subject, body, author, date } };
+    return { diffArgs: [parent, c], base: parent, head: c, newSide: c, label: subject, commit: { subject, body, author, date } };
   }
   if (a.mode === "branch") {
     const base = git(["merge-base", a.base, "HEAD"]).trim();
-    return { diffArgs: [base], base, head, newSide: "worktree", label: `branch (merge-base of ${a.base})` };
+    return { diffArgs: [base], base, head, newSide: "worktree", label: `branch vs ${a.base}` };
   }
   // raw: best-effort interpretation of user-supplied git diff args
   const raw = a.raw;
-  if (raw.includes("--staged") || raw.includes("--cached")) return { diffArgs: raw, base: head, head, newSide: "index", label: "raw " + raw.join(" ") };
+  if (raw.includes("--staged") || raw.includes("--cached")) return { diffArgs: raw, base: head, head, newSide: "index", label: "git diff " + raw.join(" ") };
   const rev = raw.find((x) => !x.startsWith("-"));
-  if (!rev) return { diffArgs: raw, base: head, head, newSide: "worktree", label: "raw " + raw.join(" ") };
+  if (!rev) return { diffArgs: raw, base: head, head, newSide: "worktree", label: "git diff " + raw.join(" ") };
   if (rev.includes("...")) {
     const [l, r] = rev.split("...");
     const b = git(["merge-base", l, r || "HEAD"]).trim();
-    return { diffArgs: raw, base: b, head, newSide: git(["rev-parse", r || "HEAD"]).trim(), label: "raw " + raw.join(" ") };
+    return { diffArgs: raw, base: b, head, newSide: git(["rev-parse", r || "HEAD"]).trim(), label: "git diff " + raw.join(" ") };
   }
   if (rev.includes("..")) {
     const [l, r] = rev.split("..");
-    return { diffArgs: raw, base: git(["rev-parse", l]).trim(), head, newSide: git(["rev-parse", r || "HEAD"]).trim(), label: "raw " + raw.join(" ") };
+    return { diffArgs: raw, base: git(["rev-parse", l]).trim(), head, newSide: git(["rev-parse", r || "HEAD"]).trim(), label: "git diff " + raw.join(" ") };
   }
-  return { diffArgs: raw, base: git(["rev-parse", rev]).trim(), head, newSide: "worktree", label: "raw " + raw.join(" ") };
+  return { diffArgs: raw, base: git(["rev-parse", rev]).trim(), head, newSide: "worktree", label: "git diff " + raw.join(" ") };
 }
 
 // ---------------------------------------------------------------- diff parsing (§6.1)
@@ -566,26 +580,80 @@ function findTypeReferences(files: FileEntry[], rev: string | null): void {
   }
 }
 
+// A commit brief is keyed by the commit's short SHA; every other brief by the branch it is on (the
+// short SHA of HEAD when detached). --key overrides both: one brief for a whole stack, or a name of your own.
+// `shown` is the name before sanitising (the branch as git spells it), for the brief's title.
+function briefKey(a: Args, R: RangeInfo): { key: string; shown: string } {
+  if (a.key) return { key: keyOf(a.key), shown: a.key };
+  if (a.mode === "commit") { const k = git(["rev-parse", "--short=7", R.head]).trim(); return { key: k, shown: k }; }
+  const branch = gitOk(["symbolic-ref", "--quiet", "--short", "HEAD"])?.trim();
+  const shown = branch || git(["rev-parse", "--short=7", "HEAD"]).trim();
+  return { key: keyOf(shown), shown };
+}
+
 // ---------------------------------------------------------------- previous brief (§15)
 
-// Sources of carry-over, in priority order: the brief on disk, then the last
-// lint-clean brief of the same mode, then of other modes (archived by lint under
-// .git/review-brief/last-<mode>.md). Switching wip↔branch therefore never
-// loses prose: a unit is carried from whichever source has a matching hash.
-function loadPrevious(outAbs: string, stateDir: string, mode: string, fresh: boolean): ParsedBrief[] {
+// Sources of carry-over, in priority order: the brief on disk, then this key's last lint-clean
+// brief (<key>/last.md, archived by lint), then the per-mode archives written before briefs had
+// keys. wip and branch briefs of one branch share a key, so switching between them never loses
+// prose: a unit is carried from whichever source has a matching hash.
+function loadPrevious(outAbs: string, stateDir: string, stateRoot: string, mode: string, fresh: boolean): ParsedBrief[] {
   if (fresh) return [];
   const read = (c: string): ParsedBrief | null => {
     if (!fs.existsSync(c)) return null;
     const p = parseBrief(fs.readFileSync(c, "utf8"));
-    return String(p.front["review-brief"]) === String(FORMAT_VERSION) ? p : null;
+    return String(p.front["pr-brief"] ?? p.front["review-brief"]) === String(FORMAT_VERSION) ? p : null; // both keys: briefs written under the old name still carry over
   };
   const onDisk = read(outAbs);
-  const sameMode = read(path.join(stateDir, `last-${mode}.md`));
-  const others = ["wip", "branch", "all", "commit", "raw"].filter((m) => m !== mode).map((m) => read(path.join(stateDir, `last-${m}.md`)));
+  const last = read(path.join(stateDir, "last.md"));
+  const legacy = [mode, ...["wip", "branch", "all", "commit", "raw"].filter((m) => m !== mode)].map((m) => read(path.join(stateRoot, `last-${m}.md`)));
   // the primary (first) source is the one the "since last" delta is measured
-  // against: the brief on disk if it is the same mode, else the same-mode archive
-  const ordered = onDisk && onDisk.front.mode !== mode ? [sameMode, onDisk, ...others] : [onDisk, sameMode, ...others];
+  // against: the brief on disk if it is the same mode, else the archive
+  const ordered = onDisk && onDisk.front.mode !== mode ? [last, onDisk, ...legacy] : [onDisk, last, ...legacy];
   return ordered.filter((p): p is ParsedBrief => p !== null);
+}
+
+// One-time migrations, before any scan so a legacy brief is never briefed as a new file:
+//  - the tool's old name (review-brief): its state directory is renamed, its snapshot ref dropped;
+//  - briefs from before keys: PR_BRIEF.md / REVIEW_BRIEF.md at the repository root and
+//    <state>/commits/<sha>/PR_BRIEF.md move to <state>/<key>/pr-brief-<key>.md (the root file's
+//    line leaves info/exclude), and the shared state files every key now has its own copy of go.
+// Nothing else changes: prose carries over from the moved file like any brief on disk.
+function migrateState(stateRoot: string, key: string): void {
+  const oldDir = path.join(path.dirname(stateRoot), "review-brief");
+  if (!fs.existsSync(stateRoot) && fs.existsSync(oldDir)) fs.renameSync(oldDir, stateRoot);
+  for (const ref of ["refs/review-brief/previous", "refs/pr-brief/previous"]) // one snapshot ref per key now
+    if (git(["rev-parse", "-q", "--verify", ref], { ok: true }).trim()) git(["update-ref", "-d", ref]);
+  const place = (from: string, k: string) => {
+    const to = path.join(stateRoot, k, `pr-brief-${k}.md`);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    if (fs.existsSync(to)) { // both layouts have one: the newer is the brief, the other its previous version (never dropped: it may carry notes)
+      const legacyNewer = fs.statSync(from).mtimeMs > fs.statSync(to).mtimeMs;
+      fs.renameSync(legacyNewer ? to : from, path.join(stateRoot, k, "previous.md"));
+      if (!legacyNewer) return;
+    }
+    fs.renameSync(from, to);
+  };
+  const excl = path.join(GIT_COMMON, "info", "exclude");
+  for (const name of ["PR_BRIEF.md", "REVIEW_BRIEF.md"]) {
+    const p = path.join(ROOT, name);
+    if (!fs.existsSync(p) || !/^---\r?\n(?:pr|review)-brief: \d+/.test(fs.readFileSync(p, "utf8").slice(0, 64))) continue;
+    const front = parseBrief(fs.readFileSync(p, "utf8")).front;
+    const k = front.mode === "commit" && typeof front.head === "string" ? gitOk(["rev-parse", "--short=7", front.head])?.trim() || key : key;
+    place(p, k);
+  }
+  // the tool never writes those names into the tree any more: their exclude lines are stale whether or not a file was moved
+  if (fs.existsSync(excl)) { const lines = fs.readFileSync(excl, "utf8").split("\n"); const kept = lines.filter((l) => l !== "PR_BRIEF.md" && l !== "REVIEW_BRIEF.md"); if (kept.length !== lines.length) fs.writeFileSync(excl, kept.join("\n")); }
+  const commits = path.join(stateRoot, "commits");
+  if (fs.existsSync(commits)) {
+    for (const sha of fs.readdirSync(commits)) {
+      const p = path.join(commits, sha, "PR_BRIEF.md");
+      if (fs.existsSync(p)) place(p, keyOf(sha));
+      try { fs.rmdirSync(path.join(commits, sha)); } catch { /* something else in it: leave it */ }
+    }
+    try { fs.rmdirSync(commits); } catch { /* not empty */ }
+  }
+  for (const f of ["units.json", "skeleton.md", "previous.md"]) { const p = path.join(stateRoot, f); if (fs.existsSync(p)) fs.rmSync(p); }
 }
 
 // ---------------------------------------------------------------- main
@@ -595,12 +663,18 @@ function main(): void {
   const { sg } = preflight(a);
   if (a.check) { process.stdout.write(`preflight ok (ast-grep, git, node ${process.versions.node})\n`); return; }
 
-  const outAbs = path.resolve(ROOT, a.out);
-  const outRel = path.relative(ROOT, outAbs);
-  // --path narrows, --exclude removes; the brief itself is excluded when it lives inside the repo
-  const excl = ["--", a.scope, ...(outRel.startsWith("..") ? [] : [`:(exclude)${outRel}`]), ...a.exclude.map((e) => `:(exclude)${e}`)];
   SCOPE = a.scope;
   const R = resolveRange(a);
+  const { key, shown: keyShown } = briefKey(a, R);
+  const stateRoot = path.join(GIT_COMMON, STATE_DIR);
+  const stateDir = path.join(stateRoot, key); // this brief's own directory: the brief, its fact table, its archive
+  if (!a.list) migrateState(stateRoot, key); // --list is read-only and leaves state alone
+  const outAbs = a.out ? path.resolve(ROOT, a.out) : path.join(stateDir, `pr-brief-${key}.md`);
+  const outRel = path.relative(ROOT, outAbs);
+  // a brief written into the working tree (--out) is kept out of the diff and of git status; under the git directory it is in neither
+  const inTree = !outRel.startsWith("..") && !path.isAbsolute(outRel) && !(outAbs + path.sep).startsWith(GIT_COMMON + path.sep);
+  // --path narrows, --exclude removes
+  const excl = ["--", a.scope, ...(inTree ? [`:(exclude)${outRel}`] : []), ...a.exclude.map((e) => `:(exclude)${e}`)];
 
   // changed files
   const files: FileEntry[] = [];
@@ -703,8 +777,7 @@ function main(): void {
   }
 
   // previous brief + carry-over (§15.3)
-  const stateDir = path.join(ROOT, ".git", STATE_DIR);
-  const sources = loadPrevious(outAbs, stateDir, a.mode, a.fresh);
+  const sources = loadPrevious(outAbs, stateDir, stateRoot, a.mode, a.fresh);
   // Prose and reviewer notes carry over from ANY earlier brief whose unit body matches (by hash).
   // The "since last" bookkeeping — badges, counts, revise notes, the header line — only makes
   // sense against a brief of the same work: the same commit in commit mode; otherwise the same
@@ -729,7 +802,7 @@ function main(): void {
   const fileMaps = sources.map((s) => new Map(s.files.map((pf) => [pf.path, pf] as const)));
   // Prose cache written by lint on every clean run: (id@hash) → slots. Any unit
   // body ever described is recoverable, whatever mode or brief it was in.
-  const cacheFile = path.join(stateDir, "cache.json");
+  const cacheFile = path.join(stateRoot, "cache.json"); // shared by every brief of the repository
   const cache: Record<string, any> = !a.fresh && fs.existsSync(cacheFile) ? JSON.parse(fs.readFileSync(cacheFile, "utf8")) : {};
   // per id: the first source whose hash matches wins; then the cache; else the first source that has it
   const pick = (maps: Map<string, any>[], key: string, hash: string): any => {
@@ -817,7 +890,7 @@ function main(): void {
   const dirty = git(["status", "--porcelain", "--untracked-files=no", ...excl]).trim() !== "" || untracked.size > 0;
   let snapshot = R.head;
   if (dirty && R.newSide === "worktree") { const s = git(["stash", "create"], { ok: true }).trim(); if (s) snapshot = s; }
-  git(["update-ref", "refs/review-brief/previous", snapshot]);
+  git(["update-ref", `refs/pr-brief/${key}`, snapshot]); // keeps this brief's snapshot alive through gc
 
   // ---- render skeleton (§9)
   const nFiles = { A: 0, M: 0, D: 0, R: 0 }; for (const f of files) nFiles[f.status]++;
@@ -830,8 +903,8 @@ function main(): void {
   const sigChanges = files.flatMap((f) => f.units.filter(sigChanged).map((u) => `\`${unitPart(u.id)}\``));
   const renames = files.flatMap((f) => f.units.filter((u) => u.renamedFrom).map((u) => `\`${u.renamedFrom}\` → \`${unitPart(u.id)}\``));
   const L: string[] = [];
-  L.push("---", `review-brief: ${FORMAT_VERSION}`, `mode: ${a.mode}`, `base: ${R.base}`, `head: ${R.head}`, `snapshot: ${snapshot}`, `worktree: ${dirty ? "dirty" : "clean"}`, `generated: ${new Date().toISOString()}`, "previous:", `  head: ${prevHead ?? "null"}`, `  snapshot: ${prevSnap ?? "null"}`, "---", "");
-  L.push(`# Review Brief — ${R.label}`, "");
+  L.push("---", `pr-brief: ${FORMAT_VERSION}`, `key: ${key}`, `root: ${ROOT}`, `mode: ${a.mode}`, `base: ${R.base}`, `head: ${R.head}`, `snapshot: ${snapshot}`, `worktree: ${dirty ? "dirty" : "clean"}`, `generated: ${new Date().toISOString()}`, "previous:", `  head: ${prevHead ?? "null"}`, `  snapshot: ${prevSnap ?? "null"}`, "---", "");
+  L.push(`# PR Brief — ${keyShown} · ${R.label}`, ""); // the key names the brief; the label says what it covers
   // summary block: a blockquote of bullets (one fact per line renders as one line), long parts folded
   const q = (l: string) => "> " + l;
   L.push(q(`- **Base** \`${R.base.slice(0, 7)}\` → **Head** \`${R.head.slice(0, 7)}\`${R.newSide === "worktree" ? " + working tree" : R.newSide === "index" ? " + index" : ""}`));
@@ -947,21 +1020,26 @@ function main(): void {
     if (fenceLen > 0) { if (fm && fm[1].length >= fenceLen && l.trim() === fm[1]) fenceLen = 0; return l; }
     return l.replace(/<<rb:([^|\n]*)\| ([^\n]*?)>>/g, (_m, id, instr) => `<<rb:${id}| ${instr.replace(/>/g, "›")}>>`);
   }).join("\n");
-  // state for lint (§14): lives under .git so it is never in the diff
+  // state for lint (§14): lives under the git directory so it is never in the diff
   fs.mkdirSync(stateDir, { recursive: true });
   if (fs.existsSync(outAbs)) fs.copyFileSync(outAbs, path.join(stateDir, "previous.md")); // whatever is overwritten stays recoverable
   else if (fs.existsSync(path.join(stateDir, "previous.md"))) fs.rmSync(path.join(stateDir, "previous.md"));
   fs.writeFileSync(path.join(stateDir, "units.json"), JSON.stringify({
-    out: outRel, mode: a.mode, generated: new Date().toISOString(), expected, overviewLocked, slotIndex,
+    out: outAbs, key, root: ROOT, mode: a.mode, generated: new Date().toISOString(), expected, overviewLocked, slotIndex,
     units: files.flatMap((f) => f.units.map((u) => ({ id: u.id, path: u.path, kind: u.kind, name: u.name, status: u.status, oldSpan: u.oldSpan, newSpan: u.newSpan, hash: u.hash, tags: u.tags, callers: u.callers, badge: u.badge }))),
   }, null, 2));
   fs.writeFileSync(path.join(stateDir, "skeleton.md"), text);
+  fs.writeFileSync(path.join(stateRoot, "last"), key + "\n"); // the brief lint checks when not told which
+  fs.mkdirSync(path.dirname(outAbs), { recursive: true }); // --out may name a folder that does not exist yet
   fs.writeFileSync(outAbs, text);
 
-  // .git/info/exclude offer (§9a): add automatically, it is local-only
-  const exclFile = path.join(ROOT, ".git", "info", "exclude");
-  const exclText = fs.existsSync(exclFile) ? fs.readFileSync(exclFile, "utf8") : "";
-  if (!outRel.startsWith("..") && !exclText.split("\n").includes(outRel)) fs.appendFileSync(exclFile, (exclText.endsWith("\n") || exclText === "" ? "" : "\n") + outRel + "\n");
+  // info/exclude offer (§9a) for a brief written into the tree: add automatically, it is local-only
+  if (inTree) {
+    const exclFile = path.join(GIT_COMMON, "info", "exclude");
+    fs.mkdirSync(path.dirname(exclFile), { recursive: true });
+    const exclText = fs.existsSync(exclFile) ? fs.readFileSync(exclFile, "utf8") : "";
+    if (!exclText.split("\n").includes(outRel)) fs.appendFileSync(exclFile, (exclText.endsWith("\n") || exclText === "" ? "" : "\n") + outRel + "\n");
+  }
 
   if (a.section) {
     const heads = [`## \`${a.section}\``, `## [\`${a.section}\`](${a.section})`];
@@ -972,11 +1050,11 @@ function main(): void {
     return;
   }
   if (a.open) { // hand the brief to the vendored editor (scripts/viewer.ts); it outlives this process
-    const child = spawn(process.execPath, [path.join(SKILL_DIR, "scripts", "viewer.ts"), "--out", outRel], { cwd: ROOT, stdio: "ignore", detached: true });
+    const child = spawn(process.execPath, [path.join(SKILL_DIR, "scripts", "viewer.ts"), "--out", outAbs], { cwd: ROOT, stdio: "ignore", detached: true });
     child.unref();
   }
   const emptySlots = parseBrief(text).tokens.length; // fence-aware: hunks may contain literal "<<rb:"
-  process.stdout.write(`wrote ${outRel.startsWith("..") ? outAbs : outRel}: ${files.length} files${untracked.size ? ` (${untracked.size} untracked)` : ""}, ${nUnits.new + nUnits.modified + nUnits.deleted + nUnits.other} units, ${emptySlots} slots to fill${carried ? ` (${carried} units carried over)` : ""}\n`);
+  process.stdout.write(`wrote ${outAbs}: ${files.length} files${untracked.size ? ` (${untracked.size} untracked)` : ""}, ${nUnits.new + nUnits.modified + nUnits.deleted + nUnits.other} units, ${emptySlots} slots to fill${carried ? ` (${carried} units carried over)` : ""}\n`);
 }
 
 main();

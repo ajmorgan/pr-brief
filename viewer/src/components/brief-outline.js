@@ -1,4 +1,4 @@
-// <brief-outline>: the sidebar outline — a review brief's files and units with
+// <brief-outline>: the sidebar outline — a PR brief's files and units with
 // since-last badges, or (mode "file") one source file's symbols with a badge on
 // those that are units in the brief. Pure view: it renders the model it is given
 // and emits goto-line {line}, filter {changedOnly}, and open-brief {id}.

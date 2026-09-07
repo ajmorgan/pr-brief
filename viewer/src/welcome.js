@@ -62,7 +62,7 @@ Name a document \`main.rs\`, \`app.ts\`, \`style.css\` or \`config.toml\` and th
 
 ## Why "xor"?
 
-\`a XOR b\` is the set of bits that differ between two values, and a diff is the xor of two revisions. This editor's other job is reading review briefs: the changed hunks between a base and a head, with the prose that explains them. The name is that operation.
+\`a XOR b\` is the set of bits that differ between two values, and a diff is the xor of two revisions. This editor's other job is reading PR briefs: the changed hunks between a base and a head, with the prose that explains them. The name is that operation.
 
 Under the hood there is no framework: web components, CSS custom properties, IndexedDB, the File System Access API and a service worker. The only library is CodeMirror, bundled once so it works offline.
 

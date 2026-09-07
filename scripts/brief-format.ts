@@ -1,4 +1,4 @@
-// brief-format.ts — shared parsing of REVIEW_BRIEF.md for extract and lint.
+// brief-format.ts — shared parsing of PR_BRIEF.md for extract and lint.
 // The brief is line-oriented Markdown. Structure comes from headings and
 // `<!-- rb:… -->` markers; prose lives in labelled slots whose value is the
 // paragraph starting at the label and ending at the first blank line.
@@ -87,7 +87,8 @@ export interface ParsedBrief {
 
 export function markerAttrs(line: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const m of line.matchAll(/(\w+)="([^"]*)"/g)) out[m[1]] = m[2];
+  // a value may itself contain quotes (a YAML document named "CodeQL"): read up to the next attribute or the marker end
+  for (const m of line.matchAll(/(\w+)="(.*?)"(?= \w+="|\s*-->)/g)) out[m[1]] = m[2];
   return out;
 }
 

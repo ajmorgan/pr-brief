@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// lint.ts — verifies REVIEW_BRIEF.md against the skeleton extract wrote
+// lint.ts — verifies a brief against the skeleton extract wrote
 // (spec §5, §15.6, §16.3). Prints one action line per problem and exits 1;
 // on a clean brief strips the rb:revise notes in place and exits 0.
 
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { FORMAT_VERSION, BUDGETS, SHORT_KINDS, parseBrief, isToken, wordCount, stripReviseNotes, labelOf, overviewParts } from "./brief-format.ts";
 
 const STALE_PREFIX = "*(code changed since this note)*";
@@ -18,18 +18,35 @@ function styleProblem(v: string): string | null {
 
 function main(): void {
   const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-  const stateFile = path.join(root, ".git", "review-brief", "units.json");
-  if (!fs.existsSync(stateFile)) { process.stderr.write("no extract state found — run extract.ts first\n"); process.exit(1); }
-  const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-  const outAbs = path.resolve(root, process.argv[2] ?? state.out);
-  if (!fs.existsSync(outAbs)) { process.stderr.write(`${state.out} not found — run extract.ts first\n`); process.exit(1); }
+  // state lives under the repository's common git directory (.git, or .bare beside worktrees), one directory per brief key
+  const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: root, encoding: "utf8" });
+  const stateRoot = path.join(common.status === 0 ? common.stdout.trim() : path.resolve(root, execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: root, encoding: "utf8" }).trim()), "pr-brief");
+  const unitsOf = (dir: string): any | null => { try { return JSON.parse(fs.readFileSync(path.join(dir, "units.json"), "utf8")); } catch { return null; } };
+  // which brief: the path or key given, else the one extract wrote last
+  const arg = process.argv[2];
+  let stateDir: string | null = null;
+  if (arg && unitsOf(path.join(stateRoot, arg))) stateDir = path.join(stateRoot, arg);
+  else if (arg) {
+    const real = (p: string): string => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } }; // /var vs /private/var: one file, two spellings
+    const want = new Set([real(arg), real(path.resolve(root, arg))]);
+    const dirs = fs.existsSync(stateRoot) ? fs.readdirSync(stateRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(stateRoot, e.name)) : [];
+    stateDir = dirs.find((d) => { const o = unitsOf(d)?.out; return typeof o === "string" && want.has(real(o)); }) ?? null;
+    if (!stateDir) { process.stderr.write(`no extract state for ${arg} — run extract.ts first\n`); process.exit(1); }
+  } else {
+    const last = fs.existsSync(path.join(stateRoot, "last")) ? fs.readFileSync(path.join(stateRoot, "last"), "utf8").trim() : "";
+    if (last && unitsOf(path.join(stateRoot, last))) stateDir = path.join(stateRoot, last);
+  }
+  if (!stateDir) { process.stderr.write("no extract state found — run extract.ts first\n"); process.exit(1); }
+  const state = unitsOf(stateDir);
+  const outAbs = path.resolve(root, state.out);
+  if (!fs.existsSync(outAbs)) { process.stderr.write(`${outAbs} not found — run extract.ts first\n`); process.exit(1); }
   const text = fs.readFileSync(outAbs, "utf8");
   const brief = parseBrief(text);
   const problems: string[] = [];
   const P = (kind: string, where: string, msg: string) => problems.push(`${kind.padEnd(9)} ${where}  — ${msg}`);
 
   // front matter
-  if (String(brief.front["review-brief"]) !== String(FORMAT_VERSION)) P("STRUCTURE", "front matter", "missing or altered — restore the block extract wrote (re-run extract if lost)");
+  if (String(brief.front["pr-brief"] ?? brief.front["review-brief"]) !== String(FORMAT_VERSION)) P("STRUCTURE", "front matter", "missing or altered — restore the block extract wrote (re-run extract if lost)");
 
   // structure: headings + markers must match exactly, in order
   const exp: string[] = state.expected, got = brief.structure;
@@ -131,11 +148,10 @@ function main(): void {
   }
   const cleaned = stripReviseNotes(text).replace(/\n{3,}/g, "\n\n");
   if (cleaned !== text) fs.writeFileSync(outAbs, cleaned);
-  // archive the clean brief per mode, and every (id@hash) → prose in a cache,
-  // so switching modes or reverting code never loses prose
-  const stateDir = path.join(root, ".git", "review-brief");
-  fs.writeFileSync(path.join(stateDir, `last-${brief.front.mode ?? state.mode}.md`), cleaned);
-  const cacheFile = path.join(stateDir, "cache.json");
+  // archive the clean brief beside its state, and every (id@hash) → prose in the repository-wide cache,
+  // so switching modes, briefing under another key, or reverting code never loses prose
+  fs.writeFileSync(path.join(stateDir, "last.md"), cleaned);
+  const cacheFile = path.join(stateRoot, "cache.json");
   const cache: Record<string, any> = fs.existsSync(cacheFile) ? JSON.parse(fs.readFileSync(cacheFile, "utf8")) : {};
   const keep = (slots: Record<string, string>) => Object.fromEntries(Object.entries(slots).filter(([k, v]) => k !== "notes" && v && !isToken(v)));
   // a commit is immutable: its overview and per-file Changes/Observations are keyed by the commit,

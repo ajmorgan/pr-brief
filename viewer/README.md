@@ -1,10 +1,10 @@
 # xor
 
-An offline-first Progressive Web App for editing Markdown and code, and for reading review briefs. The name is the operation: `a XOR b` is what differs between two values, and a diff is the xor of two revisions. Vim mode, fourteen color schemes, live Markdown preview with two-way scroll sync, real files via the File System Access API, and no framework.
+An offline-first Progressive Web App for editing Markdown and code, and for reading PR briefs. The name is the operation: `a XOR b` is what differs between two values, and a diff is the xor of two revisions. Vim mode, fourteen color schemes, live Markdown preview with two-way scroll sync, real files via the File System Access API, and no framework.
 
 ## Run it
 
-The editor lives inside the review-brief skill; this is its only copy. After changing app code or CSS run `node build.mjs --stamp` (re-stamps the service worker and import map; needs no dependencies). Only a change to `src/vendor-entry.js` or the npm dependencies needs the full `npm install && npm run build`, which requires `node_modules`.
+The editor lives inside the pr-brief skill; this is its only copy. After changing app code or CSS run `node build.mjs --stamp` (re-stamps the service worker and import map; needs no dependencies). Only a change to `src/vendor-entry.js` or the npm dependencies needs the full `npm install && npm run build`, which requires `node_modules`.
 
 
 ```sh
@@ -25,9 +25,9 @@ npm run dev        # http://127.0.0.1:8787/
 - **PWA**: installable, works fully offline, update toast when a new version is cached, `?new=1` shortcut, window-controls overlay on desktop.
 - **Keyboard first**: command palette (`⌘K`), fuzzy document switcher (`⌘⇧F`), zen mode (`⌘⇧Z`), help (`⌘/`).
 
-## Review-brief mode
+## PR-brief mode
 
-A document whose front matter starts `review-brief:` (written by the `review-brief` Claude Code skill) gets an outline of files and units in the sidebar, folded `diff` hunks, `]u`/`[u` unit motions, `:unit`, `:file`, `:note`, `:changed`, and `:rel` (reload from disk). Open one with `?brief=<url>` from the skill's local server (`:w` PUTs back; saves are refused if the file changed on disk since it was read) or from disk like any other file. See `src/lib/brief.js` and `src/components/brief-outline.js`.
+A document whose front matter starts `pr-brief:` (written by the `pr-brief` Claude Code skill) gets an outline of files and units in the sidebar, folded `diff` hunks, `]u`/`[u` unit motions, `:unit`, `:file`, `:note`, `:changed`, and `:rel` (reload from disk). Open one with `?brief=/briefs/<slug>` from the skill's local server (`:w` PUTs back; saves are refused if the file changed on disk since it was read) or from disk like any other file. The server serves several briefs at once; every one it lists appears in the Open list, and a file link opens the file at that brief's commit. See `src/lib/brief.js` and `src/components/brief-outline.js`.
 
 ## Layout
 
@@ -41,7 +41,7 @@ src/components/         web components: editor-pane, markdown-preview, file-list
                         brief-outline, command-palette, status-bar, app-toast, help-dialog
 src/lib/                themes, settings (localStorage), store (IndexedDB),
                         markdown (marked + DOMPurify + Lezer highlighting), files,
-                        brief (review-brief model)
+                        brief (pr-brief model)
 src/vendor-entry.js     the npm imports; bundled by esbuild into vendor/editor.js
 ```
 

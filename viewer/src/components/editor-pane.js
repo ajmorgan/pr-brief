@@ -97,7 +97,7 @@ for (const [name, prefix] of [
   ['write', 'w'], ['wq', 'wq'], ['quit', 'q'], ['edit', 'e'], ['new', 'new'], ['set', 'set'],
   ['colorscheme', 'colo'], ['preview', 'pre'], ['split', 'sp'], ['zen', 'zen'], ['help', 'h'],
   ['saveas', 'sav'], ['files', 'files'], ['language', 'lang'], ['export', 'export'],
-  // review-brief mode
+  // pr-brief mode
   ['unit', 'unit'], ['file', 'file'], ['note', 'note'], ['copy', 'copy'], ['changed', 'ch'], ['reload', 'rel'],
 ]) defineEx(name, prefix);
 
@@ -480,7 +480,7 @@ export class EditorPane extends HTMLElement {
     if (cm) Vim.handleKey(cm, keys);
   }
 
-  // --- Review-brief mode ---------------------------------------------------
+  // --- PR-brief mode ---------------------------------------------------
   /** Install (or remove) hunk folding; call foldHunks() to collapse them. */
   setBrief(on) {
     this.#brief = on;

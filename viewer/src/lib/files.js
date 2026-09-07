@@ -70,13 +70,13 @@ export async function readHandle(handle) {
   return { content: await file.text(), mtime: file.lastModified };
 }
 
-// --- Remote documents: a local server (review-brief's viewer.ts) exposes one
+// --- Remote documents: a local server (pr-brief's viewer.ts) exposes one
 // file at a URL — GET reads it, PUT writes it, GET <url>/meta reports mtime.
 export async function fetchRemote(url) {
   const [meta, res] = await Promise.all([fetch(`${url}/meta`, { cache: 'no-store' }), fetch(url, { cache: 'no-store' })]);
   if (!meta.ok || !res.ok) throw new Error(`server returned ${meta.ok ? res.status : meta.status}`);
   const m = await meta.json();
-  return { name: m.name, content: await res.text(), mtime: m.mtime, remote: url };
+  return { name: m.name, content: await res.text(), mtime: m.mtime, remote: url, meta: m };
 }
 
 /** The server's metadata for a remote document: { name, mtime, viewer? } — `viewer` is the served app's build id. */

@@ -1,5 +1,7 @@
 ---
-review-brief: 1
+pr-brief: 1
+key: feature
+root: /Users/adammorgan/review/rb-fixture
 mode: branch
 base: f087cbd29c7bfe6ee5ed9d50e201a3ad74639d27
 head: f36e06b2f1155c7f2b1a473adcd99f65dddc71fe
@@ -11,7 +13,7 @@ previous:
   snapshot: f36e06b2f1155c7f2b1a473adcd99f65dddc71fe
 ---
 
-# Review Brief — branch (merge-base of origin-main-sim)
+# PR Brief — feature · branch vs origin-main-sim
 
 > - **Base** `f087cbd` → **Head** `f36e06b` + working tree
 > - **Files** 7 changed (2 added, 4 modified, 1 deleted) · **Units** 18 (7 new, 7 modified, 2 deleted, 2 other)

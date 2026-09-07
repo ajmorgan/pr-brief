@@ -11,9 +11,10 @@ const slugger = (text) => text.toLowerCase().trim().replace(/<[^>]+>/g, '')
 
 let briefRendering = false;
 let briefSplit = false;
+let briefFrom = null; // the served brief's /briefs/… path: file links carry it, so the file is read as that brief sees it
 let briefLang = null; // grammar of the file the current brief section is about
 /** In brief mode, diff hunks render collapsed so the prose reads first; `split` lays them out side by side. */
-export function setBriefRendering(on, { split = false } = {}) { briefRendering = on; briefSplit = split; }
+export function setBriefRendering(on, { split = false, from = null } = {}) { briefRendering = on; briefSplit = split; briefFrom = from; }
 
 /**
  * Side-by-side layout of a unified hunk. Context lines go to both columns; a run
@@ -217,10 +218,10 @@ export function renderMarkdown(src) {
     const href = a.getAttribute('href');
     if (/^https?:\/\//i.test(href)) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
     else if (briefRendering && !/^[#?/]|^[a-z]+:/i.test(href)) {
-      // repo-relative link from a review brief: ?file=<path>&line=N opens it in this editor
+      // repo-relative link from a PR brief: ?file=<path>&line=N opens it in this editor
       const [file, frag] = href.split('#');
       const line = frag?.match(/^L(\d+)/)?.[1];
-      a.setAttribute('href', `?file=${encodeURIComponent(file)}${line ? `&line=${line}` : ''}`);
+      a.setAttribute('href', `?file=${encodeURIComponent(file)}${line ? `&line=${line}` : ''}${briefFrom ? `&from=${encodeURIComponent(briefFrom)}` : ''}`);
       a.title = `Open ${file}${line ? ` at line ${line}` : ''} (middle-click for a new tab)`;
     }
   }

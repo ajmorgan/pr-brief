@@ -61,7 +61,7 @@ kbd {
 .app.sidebar-hidden { grid-template-columns: 0 1fr; }
 .app.sidebar-hidden .sidebar { display: none; }
 /* The sidebar holds the document list and, when the active document has one, an outline
-   (a review brief's files and units, or a source file's symbols) stacked below it. */
+   (a PR brief's files and units, or a source file's symbols) stacked below it. */
 .sidebar {
   grid-area: sidebar;
   display: flex; flex-direction: column;
@@ -528,13 +528,13 @@ app-toast {
   .markdown-body { max-width: none; padding: 0; }
 }
 
-/* review-brief summary block: folded commit message / agent instructions */
+/* pr-brief summary block: folded commit message / agent instructions */
 .markdown-body details.rb-meta { margin: 0.5em 0 0; }
 .markdown-body details.rb-meta > summary { cursor: pointer; color: var(--muted); font-size: 0.9em; user-select: none; }
 .markdown-body details.rb-meta[open] > summary { margin-bottom: 0.4em; }
 .markdown-body blockquote > ul { margin: 0; }
 
-/* review-brief file sections: a card per file with a sticky heading and a status pill */
+/* pr-brief file sections: a card per file with a sticky heading and a status pill */
 .markdown-body section.rb-file { margin: 1.75em 0; padding: 0 1.2em 0.6em; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); content-visibility: auto; }
 .markdown-body .rb-unit { display: flow-root; } /* owns its margins: units tile the card with no gaps between scroll-spy targets */
 .markdown-body .rb-copy {

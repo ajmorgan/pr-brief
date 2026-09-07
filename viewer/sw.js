@@ -5,7 +5,7 @@
 // the activate step throws the old one away.
 
 /* BUILD:START */
-const VERSION = '19a6997f3f22';
+const VERSION = '1da309c6d3a6';
 const ASSETS = [
   './',
   'app.css',
@@ -67,9 +67,12 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== location.origin) return;
+  // the viewer server's live routes are never cached or intercepted: caching /events would hold a copy of an
+  // endless stream open, so every reload left a connection behind until the browser's per-host limit was hit
+  if (/^\/(events|brief|briefs|file|switch|stop)(\/|$)/.test(url.pathname)) return;
 
   const fromNetwork = () => fetch(request).then((response) => {
-    if (response.ok && response.type === 'basic') {
+    if (response.ok && response.type === 'basic' && !/text\/event-stream/.test(response.headers.get('content-type') ?? '')) {
       const copy = response.clone();
       caches.open(CACHE).then((cache) => cache.put(request.mode === 'navigate' ? 'index.html' : request, copy));
     }

@@ -1,23 +1,25 @@
 ---
-name: review-brief
+name: pr-brief
 description: |
-  Produce or update REVIEW_BRIEF.md: a per-file, per-function brief of the
+  Produce or update a PR brief: a per-file, per-function brief of the
   current changes so a human can come up to speed before reviewing. Not for
   finding bugs — that is /code-review.
   Keywords:
-  - review brief, brief me, catch me up on the changes
+  - PR brief, pr brief, review brief, brief me, catch me up on the changes
   - what changed per function, walk me through the diff
-  - REVIEW_BRIEF.md, update the brief
-argument-hint: "[wip|branch|all|commit <ref>] [--base <ref>] [--fresh] [--no-untracked] [--list] [--open] [-- <git diff args>]"
+  - update the brief, regenerate the brief, pr-brief-<branch>.md
+argument-hint: "[wip|branch|all|commit <ref>] [--base <ref>] [--fresh] [--no-untracked] [--key <name>] [--list] [--open] [-- <git diff args>]"
 user-invocable: true
 allowed-tools: Read, Edit, Bash(node *), Bash(git *)
 ---
 
-You are producing `REVIEW_BRIEF.md` for the human who will review the current
+You are producing a PR brief for the human who will review the current
 changes. A script computes every file, function, hunk, and heading. You write
-prose into slots. You never decide what to include.
+prose into slots. You never decide what to include. The brief lives under the
+repository's git directory as `pr-brief/<key>/pr-brief-<key>.md`, keyed by
+the branch name or, for one commit, its short SHA; extract prints the path.
 
-Skill directory: `~/.claude/skills/review-brief`
+Skill directory: `~/.claude/skills/pr-brief`
 
 ## Procedure
 
@@ -28,7 +30,7 @@ Follow the steps in order. Each step is one command or one kind of edit.
 Run exactly:
 
 ```
-node ~/.claude/skills/review-brief/scripts/extract.ts $ARGUMENTS
+node ~/.claude/skills/pr-brief/scripts/extract.ts $ARGUMENTS
 ```
 
 - Exit code **2**: a dependency is missing. Relay the script's message to the
@@ -39,19 +41,21 @@ node ~/.claude/skills/review-brief/scripts/extract.ts $ARGUMENTS
 - Exit code **0** and the arguments contain `--list`, `--check` or
   `--section`: extract printed a table or a check and wrote nothing. Relay
   its output verbatim. STOP.
-- Exit code **0** otherwise: it printed `wrote REVIEW_BRIEF.md: … N slots to fill`.
-  Continue. If N is 0, go to Step 4.
+- Exit code **0** otherwise: it printed `wrote <path>: … N slots to fill`.
+  `<path>` is the brief; Steps 2, 4 and 5 use it. Continue. If N is 0, go
+  to Step 4.
 
 `$ARGUMENTS` is passed through unchanged. With no arguments the brief covers
 the working tree vs HEAD, untracked files included (`.gitignore` respected). `branch` covers the whole branch vs the merge-base
 with `origin/main`. `all` covers every tracked file (the entire tree as one
 set of additions) — use it to brief a whole small repository. `commit <ref>`
-covers one commit (its parent → itself). `--open` makes
+covers one commit (its parent → itself). `--key <name>` names the brief
+yourself (one brief standing for a whole stack). `--open` makes
 extract start the bundled viewer after writing; it does not change your steps.
 
 ### Step 2 — Read
 
-Read `REVIEW_BRIEF.md`. Its summary block ends with a folded
+Read the brief at `<path>`. Its summary block ends with a folded
 `<details>` titled *Agent instructions* containing the line
 `**Read these before filling any slot**` and, below it, one bullet per file —
 Read every file listed there, in full. If that line says "at commit `<sha>`", the working tree is not the
@@ -108,7 +112,7 @@ Do not:
 - write, edit, or remove any heading, `---` divider, `<!-- rb:… -->` marker,
   `**Callers (by name):**` / `**References (by name):**` line, or ```diff block — extract wrote them;
 - add or remove units — if one seems missing, run
-  `node ~/.claude/skills/review-brief/scripts/extract.ts $ARGUMENTS --list`
+  `node ~/.claude/skills/pr-brief/scripts/extract.ts $ARGUMENTS --list`
   and report the table to the user;
 - rewrite the whole file — edit one slot at a time.
 
@@ -117,7 +121,7 @@ Do not:
 Run exactly:
 
 ```
-node ~/.claude/skills/review-brief/scripts/lint.ts
+node ~/.claude/skills/pr-brief/scripts/lint.ts <path>
 ```
 
 - Exit **0**: it printed `lint clean`. Go to Step 5.
@@ -136,7 +140,7 @@ Repeat until exit 0.
 
 Print, and nothing else:
 
-1. The path `REVIEW_BRIEF.md`.
+1. The path `<path>`, as extract printed it.
 2. The bullet lines of the summary block (the lines starting with `> -`),
    verbatim. Not the `<details>` parts.
 3. The `**Overview:**` paragraph, verbatim.

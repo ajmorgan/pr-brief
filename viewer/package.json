@@ -1,7 +1,7 @@
 {
   "name": "xor",
   "version": "1.0.0",
-  "description": "xor: offline-first Markdown and code editor PWA with a review-brief mode, vim mode, color schemes and live preview.",
+  "description": "xor: offline-first Markdown and code editor PWA with a pr-brief mode, vim mode, color schemes and live preview.",
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",

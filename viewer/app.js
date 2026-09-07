@@ -39,7 +39,8 @@ let active = null;          // the active document record
 let diskDirty = false;      // active doc differs from what is on disk
 let activePane = 'editor';  // which pane the user is scrolling
 let installPrompt = null;
-let brief = null;           // parsed review-brief model when the active doc is one
+let brief = null;           // parsed pr-brief model when the active doc is one
+const briefFrom = () => (active?.remote ? new URL(active.remote).pathname : null); // the served brief's path, carried on its file links
 const bootTime = Date.now();
 
 // --- Theme -------------------------------------------------------------------
@@ -68,7 +69,7 @@ function effectiveView() {
 
 function applySettings({ persist = true } = {}) {
   els.editor.applySettings(settings);
-  setBriefRendering(!!brief, { split: settings.diffView === 'split' });
+  setBriefRendering(!!brief, { split: settings.diffView === 'split', from: briefFrom() });
   els.app.dataset.view = effectiveView();
   // a hidden editor must not keep the keyboard: WebKit still routes typed text to a focused
   // contenteditable after it is display:none, so a stray key in preview view would edit the document
@@ -117,6 +118,10 @@ onExternalSettingsChange((fresh) => {
 // --- Documents ---------------------------------------------------------------
 async function refreshList() {
   docs = await store.listDocuments();
+  // one document per served brief: a duplicate (two syncs racing, a copy left by an older build) is dropped, the active one kept
+  const byRemote = new Map(); const extra = [];
+  for (const d of docs) { if (!d.remote) continue; const k = byRemote.get(d.remote); if (!k) byRemote.set(d.remote, d); else if (d.id === active?.id) { extra.push(k); byRemote.set(d.remote, d); } else extra.push(d); }
+  if (extra.length) { for (const d of extra) { await store.deleteDocument(d.id); els.editor.forgetDocument(d.id); positions.delete(d.id); } docs = await store.listDocuments(); }
   els.files.documents = docs;
   els.files.activeId = active?.id ?? null;
 }
@@ -169,8 +174,9 @@ async function openDocument(id) {
   return true;
 }
 
-async function createDocument({ name, content = '', handle = null, remote = null, mtime = null, open = true } = {}) {
+async function createDocument({ name, content = '', handle = null, remote = null, mtime = null, path = null, open = true } = {}) {
   const doc = store.createDocument({ name: name || uniqueName('Untitled.md'), content, handle, remote, mtime });
+  if (path) doc.path = path;
   await store.putDocument(doc);
   await refreshList();
   if (open) await openDocument(doc.id);
@@ -211,6 +217,7 @@ async function deleteDocument(id) {
 async function closeDocumentById(id) {
   const doc = docs.find((d) => d.id === id);
   if (!doc) return;
+  if (doc.remote) rememberClosed(doc.path ?? doc.remote, true); // a brief closed with × stays closed, across reloads and tabs
   if (active?.id === id) autosave.flush();
   await store.deleteDocument(id);
   els.editor.forgetDocument(id);
@@ -383,7 +390,9 @@ async function onWatchMeta(meta) {
   try {
     if (active.remote) {
       meta ??= await files.remoteMeta(active.remote);
-      briefMeta = meta;
+      // the frame describes every served brief: this document's own entry decides its mtime and repo (the top level is the current brief)
+      const mine = Array.isArray(meta.briefs) ? meta.briefs.find((b) => new URL(b.url, active.remote).toString() === active.remote) ?? null : null;
+      briefMeta = mine ? { ...meta, ...mine, viewer: meta.viewer } : meta;
       // the viewer's own code was rebuilt (build.mjs --stamp): this page is stale, reload it
       if (meta.viewer) {
         if (viewerBuild === null) viewerBuild = meta.viewer;
@@ -396,10 +405,12 @@ async function onWatchMeta(meta) {
           return;
         }
       }
-      if (typeof meta.mtime !== 'number' || Math.abs(meta.mtime - active.mtime) <= 1) return; // filesystems round mtimes
+      await syncBriefs(meta, active.remote);
+      if (await followCurrent(meta, active.remote)) return;
+      if (typeof briefMeta.mtime !== 'number' || Math.abs(briefMeta.mtime - active.mtime) <= 1) return; // filesystems round mtimes
     } else if (!(await changedOnDisk())) return;
     if (diskDirty) {
-      const now = active.remote ? meta.mtime : (await active.handle.getFile()).lastModified;
+      const now = active.remote ? briefMeta.mtime : (await active.handle.getFile()).lastModified;
       if (watchNotifiedFor === now) return;
       watchNotifiedFor = now;
       els.toast.show(`${active.name} changed on disk. Your unsaved edits are kept; reload to see the new version.`, { duration: 8000, action: 'Reload', onAction: reload });
@@ -605,7 +616,7 @@ els.editor.addEventListener('ex-command', async (e) => {
     case 'language': arg ? setLanguage(arg) : pickLanguage(); break;
     case 'export': exportHTML(); break;
     case 'reload': await reload(); break;
-    // review-brief mode
+    // pr-brief mode
     case 'unit': if (!requireOutline()) break; arg ? jumpToUnit(briefs.findUnit(outline, arg), arg) : pickUnit(); break;
     case 'file': if (!requireOutline()) break; { const f = arg ? briefs.findFile(outline, arg) : null; if (f) gotoBriefLine(f.line); else if (arg) els.toast.show(`No file matching "${arg}"`, { kind: 'error' }); else pickBriefFile(); } break;
     case 'unit-next': case 'unit-prev': if (!requireOutline()) break; jumpToUnit(briefs.stepUnit(outline, els.editor.cursorLine, name === 'unit-next' ? 1 : -1, els.outline.changedOnly)); break;
@@ -615,8 +626,8 @@ els.editor.addEventListener('ex-command', async (e) => {
   }
 });
 
-// --- Review-brief mode -------------------------------------------------------
-// A document whose front matter starts `review-brief:` gets an outline, folded
+// --- PR-brief mode -------------------------------------------------------
+// A document whose front matter starts `pr-brief:` gets an outline, folded
 // hunks, unit motions and a :note command. Everything else stays as it is.
 function enterBriefMode(content, { fold = false } = {}) {
   const on = briefs.isBrief(content);
@@ -624,7 +635,7 @@ function enterBriefMode(content, { fold = false } = {}) {
   else brief = null;
   els.app.classList.toggle('brief', on);
   els.editor.setBrief(on);
-  setBriefRendering(on, { split: settings.diffView === 'split' });
+  setBriefRendering(on, { split: settings.diffView === 'split', from: briefFrom() });
   if (on && fold) els.editor.foldHunks();
   setOutline();
   if (!outline) els.status.update({ words: undefined });
@@ -636,7 +647,7 @@ let outline = null;
 /** A brief-shaped model for a read-only source file, from the symbols the viewer server sent. */
 function sourceOutline(doc) {
   if (!doc?.source || !Array.isArray(doc.symbols)) return null;
-  const briefDoc = docs.find((d) => d.remote && briefs.isBrief(d.content));
+  const briefDoc = (doc.from && docs.find((d) => d.remote && new URL(d.remote).pathname === doc.from)) || docs.find((d) => d.remote && briefs.isBrief(d.content));
   const inBrief = new Set(briefDoc ? briefs.parseBrief(briefDoc.content).units.map((u) => u.id) : []);
   const file = { path: doc.source, status: doc.rev ?? '', line: 1, end: doc.content.split('\n').length, hash: '', units: [] };
   file.units = doc.symbols.map((s, index) => ({
@@ -679,7 +690,7 @@ function updateBriefStatus(line) {
 
 function requireBrief() {
   if (brief) return true;
-  els.toast.show('Not a review brief (no `review-brief:` front matter)', { kind: 'error' });
+  els.toast.show('Not a PR brief (no `pr-brief:` front matter)', { kind: 'error' });
   return false;
 }
 
@@ -726,7 +737,7 @@ function unitAsComment(unit) {
   const context = [slots.purpose && `**${slots.contextLabel ?? 'Context'}:** ${slots.purpose}`, slots.changes && `**Changes:** ${slots.changes}`].filter(Boolean).join('\n\n');
   const head3 = `**${where}** ${sig}${status}`;
   const md = slots.notes
-    ? `${head3}\n\n${slots.notes}\n\n<details><summary>Context from the review brief</summary>\n\n${context}\n\n</details>`
+    ? `${head3}\n\n${slots.notes}\n\n<details><summary>Context from the PR brief</summary>\n\n${context}\n\n</details>`
     : `${head3}\n\n${context}`;
   return { markdown: md.trim() + '\n', html: markdownToHTML(md) };
 }
@@ -771,7 +782,7 @@ function editNote() {
 els.outline.addEventListener('goto-line', (e) => gotoBriefLine(e.detail.line));
 // a symbol that is a unit in the brief: open the brief at that unit
 els.outline.addEventListener('open-brief', (e) => {
-  const b = docs.find((d) => d.remote);
+  const b = (active?.from && docs.find((d) => d.remote && new URL(d.remote).pathname === active.from)) || docs.find((d) => d.remote);
   const path = b ? new URL(b.remote).pathname : '/brief';
   location.href = `?brief=${encodeURIComponent(path)}&unit=${encodeURIComponent(e.detail.id)}`;
 });
@@ -787,10 +798,63 @@ function takeStoredPosition(url) {
   try { const pos = JSON.parse(sessionStorage.getItem(posKey(url)) ?? 'null'); sessionStorage.removeItem(posKey(url)); return pos; } catch { return null; }
 }
 
-/** ?brief=<url>: open (or refresh) the document served by a local review-brief viewer. */
+// The server may serve several briefs at once (the last few commits, a stack of PRs). Every brief it
+// lists is kept in the Open list, so the sidebar shows the whole set; one closed with × stays closed for
+// this page. A change of the server's current brief is extract --open handing a new one over: follow it.
+// closed briefs are remembered across reloads and tabs, keyed by the brief's path on disk (a port gets reused for
+// other repositories; a URL would hide their briefs too). An explicit request (?brief=, or extract --open handing
+// the brief over) reopens one
+const CLOSED_KEY = 'xor:closed-briefs';
+const closedBriefs = new Set((() => { try { return JSON.parse(localStorage.getItem(CLOSED_KEY) ?? '[]'); } catch { return []; } })());
+function rememberClosed(remote, closed) {
+  if (closed) closedBriefs.add(remote); else closedBriefs.delete(remote);
+  try { localStorage.setItem(CLOSED_KEY, JSON.stringify([...closedBriefs])); } catch { /* storage unavailable */ }
+}
+let currentBrief = null;
+let briefSync = Promise.resolve(); // one sync at a time: the page and the first event frame would otherwise add the same briefs twice
+function syncBriefs(meta, baseUrl) { return (briefSync = briefSync.then(() => syncBriefsNow(meta, baseUrl)).catch(() => {})); }
+async function syncBriefsNow(meta, baseUrl) {
+  if (!Array.isArray(meta?.briefs)) return;
+  let added = false;
+  for (const b of meta.briefs) {
+    const remote = new URL(b.url, baseUrl).toString();
+    if (closedBriefs.has(b.path ?? remote) || docs.some((d) => d.remote === remote)) continue;
+    try { const f = await files.fetchRemote(remote); await createDocument({ name: f.name, content: f.content, remote, mtime: f.mtime, path: b.path ?? null, open: false }); added = true; }
+    catch { /* gone between the frame and the fetch */ }
+  }
+  if (added) await refreshList();
+}
+async function followCurrent(meta, baseUrl) {
+  const was = currentBrief;
+  currentBrief = meta?.current ?? currentBrief;
+  if (!meta?.current || was === null || was === meta.current) return false;
+  const remote = new URL(`/briefs/${meta.current}`, baseUrl).toString();
+  let target = docs.find((d) => d.remote === remote);
+  if (!target) {
+    // closed earlier: a hand-off is an explicit request for it, so bring it back
+    const p = meta.briefs?.find((b) => b.slug === meta.current)?.path ?? remote;
+    rememberClosed(p, false);
+    try { const f = await files.fetchRemote(remote); target = await createDocument({ name: f.name, content: f.content, remote, mtime: f.mtime, path: p === remote ? null : p, open: false }); } catch { return false; }
+  }
+  if (target.id === active?.id) return false;
+  await openDocument(target.id);
+  return true;
+}
+
+/** ?brief=<url>: open (or refresh) the document served by a local pr-brief viewer. */
 async function openRemoteBrief(url) {
-  const fresh = await files.fetchRemote(url);
+  let fresh = await files.fetchRemote(url);
+  // /brief is whichever brief is current: open it under its own /briefs/<slug> URL, so several can be open at once
+  const canonical = fresh.meta?.current && new URL(url).pathname === '/brief' ? new URL(`/briefs/${fresh.meta.current}`, url).toString() : url;
+  if (canonical !== url) {
+    const legacy = docs.find((d) => d.remote === url);
+    if (legacy && !docs.some((d) => d.remote === canonical)) { legacy.remote = canonical; await store.putDocument(legacy); }
+    url = canonical; fresh = await files.fetchRemote(url);
+  }
+  currentBrief = fresh.meta?.current ?? currentBrief;
+  rememberClosed(fresh.meta?.path ?? url, false); // asked for by URL: never treated as closed
   let doc = docs.find((d) => d.remote === url);
+  if (doc && fresh.meta?.path && doc.path !== fresh.meta.path) { doc.path = fresh.meta.path; await store.putDocument(doc); }
   if (doc?.dirty && doc.content === fresh.content) { doc.dirty = false; await store.putDocument(doc); } // a stale flag: nothing is unsaved
   if (doc?.dirty) {
     // the browser copy carries edits not yet saved to disk (the reviewer's notes): a page load must not
@@ -801,6 +865,7 @@ async function openRemoteBrief(url) {
     updateSavedStatus();
     if (moved) els.toast.show(`${fresh.name} changed on disk. Your unsaved edits are kept; reload to see the new version.`, { duration: 8000, action: 'Reload', onAction: reload });
     else els.toast.show(`Opened ${fresh.name} with your unsaved edits`);
+    await syncBriefs(fresh.meta, url);
     return;
   }
   if (doc) {
@@ -810,27 +875,29 @@ async function openRemoteBrief(url) {
     await refreshList();
     await openDocument(doc.id);
   } else {
-    doc = await createDocument({ name: fresh.name, content: fresh.content, remote: url, mtime: fresh.mtime });
+    doc = await createDocument({ name: fresh.name, content: fresh.content, remote: url, mtime: fresh.mtime, path: fresh.meta?.path ?? null });
   }
-  els.toast.show(`Opened ${fresh.name} from the review-brief viewer`);
+  els.toast.show(`Opened ${fresh.name} from the pr-brief viewer`);
+  await syncBriefs(fresh.meta, url);
 }
 
-/** ?file=<path>&line=N: open a repository file served by the local review-brief viewer, read-only, at a line. */
-async function openSourceFile(path, line) {
-  const url = new URL(`/file?path=${encodeURIComponent(path)}`, location.href).toString();
+/** ?file=<path>&line=N: open a repository file served by the local pr-brief viewer, read-only, at a line. */
+async function openSourceFile(path, line, from = null) {
+  const slug = from?.match(/^\/briefs\/([^/]+)/)?.[1] ?? null; // which served brief the file is read for (its commit, its repository)
+  const url = new URL(`/file?path=${encodeURIComponent(path)}${slug ? `&brief=${encodeURIComponent(slug)}` : ''}`, location.href).toString();
   const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) throw new Error(await res.text());
   const src = await res.json();
   let doc = docs.find((d) => d.source === src.path);
   if (doc) {
-    Object.assign(doc, { content: src.content, rev: src.rev, name: src.name, symbols: src.symbols ?? [], updatedAt: Date.now() });
+    Object.assign(doc, { content: src.content, rev: src.rev, name: src.name, symbols: src.symbols ?? [], from: from ?? doc.from ?? null, updatedAt: Date.now() });
     await store.putDocument(doc);
     els.editor.forgetDocument(doc.id);
     await refreshList();
     await openDocument(doc.id);
   } else {
     doc = await createDocument({ name: src.name, content: src.content, open: false });
-    Object.assign(doc, { source: src.path, rev: src.rev, readOnly: true, symbols: src.symbols ?? [] });
+    Object.assign(doc, { source: src.path, rev: src.rev, readOnly: true, symbols: src.symbols ?? [], from });
     await store.putDocument(doc);
     await refreshList();
     await openDocument(doc.id);
@@ -1183,11 +1250,12 @@ async function boot() {
   // back/forward onto a file that has since been closed with ×: show the brief, not the closed file
   const traversal = performance.getEntriesByType('navigation')[0]?.type === 'back_forward';
   if (params.has('file') && traversal && !docs.some((d) => d.source === params.get('file'))) {
-    const b = docs.find((d) => d.remote);
-    if (b) { params.delete('file'); params.delete('line'); params.set('brief', new URL(b.remote).pathname); }
+    const from = params.get('from');
+    const b = (from && docs.find((d) => d.remote && new URL(d.remote).pathname === from)) || docs.find((d) => d.remote);
+    if (b) { params.delete('file'); params.delete('line'); params.delete('from'); params.set('brief', new URL(b.remote).pathname); }
   }
   if (params.has('file')) {
-    try { await openSourceFile(params.get('file'), Number(params.get('line')) || 0); }
+    try { await openSourceFile(params.get('file'), Number(params.get('line')) || 0, params.get('from')); }
     catch (err) {
       els.toast.show(`Could not open ${params.get('file')}: ${err.message}`, { kind: 'error', duration: 10000 });
       if (!docs.length) await createDocument({ name: WELCOME_NAME, content: WELCOME });

@@ -45,7 +45,7 @@ const shortcuts = [
     [':files', 'Toggle sidebar'],
     [':h', 'This help'],
   ]],
-  ['Review brief (when a REVIEW_BRIEF.md is open)', [
+  ['PR brief (when a brief is open)', [
     [']u / [u', 'Next / previous unit (respects :changed)'],
     [':unit name', 'Jump to a unit by name (no name → pick from a list)'],
     [':file path', 'Jump to a file section'],

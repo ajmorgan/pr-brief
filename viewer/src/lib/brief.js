@@ -1,5 +1,5 @@
-// Review-brief model. A brief is Markdown written by the review-brief skill:
-// front matter starting `review-brief: N`, `## file` sections, `### unit`
+// PR-brief model. A brief is Markdown written by the pr-brief skill:
+// front matter starting `pr-brief: N`, `## file` sections, `### unit`
 // entries, each followed by an `<!-- rb:… -->` marker, then labelled slots
 // (`**File Context:**` / `**<Kind> Context:**`, `**Changes:**`, `**Notes:**`, …) and a ```diff hunk. This module reads that
 // structure into line-addressed files and units; it never changes the text.
@@ -8,12 +8,12 @@ const FENCE = /^(`{3,})/;
 
 /** True when the document is a brief (cheap; used to gate brief mode). */
 export function isBrief(text) {
-  return /^---\r?\nreview-brief: \d+/.test(text);
+  return /^---\r?\n(?:pr|review)-brief: \d+/.test(text); // briefs written under the old name still count
 }
 
 function attrs(line) {
   const out = {};
-  for (const m of line.matchAll(/(\w+)="([^"]*)"/g)) out[m[1]] = m[2];
+  for (const m of line.matchAll(/(\w+)="(.*?)"(?= \w+="|\s*-->)/g)) out[m[1]] = m[2]; // a value may contain quotes: read up to the next attribute
   return out;
 }
 
