@@ -159,6 +159,14 @@ export function renderMarkdown(src) {
       unit.dataset.spyLine = String(line);
       section.append(unit);
     }
+    if (briefRendering && token.type === 'html' && section && /^<!-- rb:unit /.test(token.raw) && /kind="(other|file)"/.test(token.raw)) {
+      // a bullet unit (imports, top-level lines, a whole file): the marker line precedes the bullet, and
+      // the bullet's line is what the brief parser gives the unit, so the wrapper carries that
+      unit = document.createElement('div');
+      unit.className = 'rb-unit rb-unit-bullet';
+      unit.dataset.spyLine = String(line + 1);
+      section.append(unit);
+    }
     if (briefRendering && token.type === 'heading') {
       // `## `path` — …` and `### `sig` — … · `path:lines`` name the file; keep its grammar for the hunks that follow
       const paths = [...token.text.matchAll(/`([^`\s]+?)(?::\d+-\d+)?`/g)].map((m) => m[1]).filter((p) => p.includes('.') && !p.includes('('));
