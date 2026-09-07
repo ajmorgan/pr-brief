@@ -70,8 +70,10 @@ export function parseBrief(text) {
       continue;
     }
     if (pendingBullet && l.startsWith('- ')) {
-      pendingBullet.heading = unlink(l).slice(2, l.indexOf(' — ') > 0 ? l.indexOf(' — ') : undefined);
-      pendingBullet.touched = touchedBy(l);
+      const head = unlink(l).slice(2); // measure the cut on the same text that is sliced
+      const cut = head.indexOf(' — ');
+      pendingBullet.heading = cut > 0 ? head.slice(0, cut) : head;
+      pendingBullet.touched = touchedBy(pendingBullet.heading);
       pendingBullet = null;
     }
   }

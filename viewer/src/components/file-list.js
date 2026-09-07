@@ -76,7 +76,8 @@ export class FileList extends HTMLElement {
     if (e.key === 'ArrowUp') { e.preventDefault(); items[Math.max(0, i - 1)]?.focus(); }
     if (e.key === 'Delete' || e.key === 'Backspace') {
       const li = document.activeElement.closest('li[data-id]');
-      if (li && e.metaKey) this.#emit('delete', { id: li.dataset.id });
+      // the same path as the row's ×: close for a copy, an armed "Delete?" for a browser-only document
+      if (li && e.metaKey) { e.preventDefault(); li.querySelector('.file-delete')?.click(); }
     }
   }
 

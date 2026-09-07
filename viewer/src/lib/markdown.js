@@ -117,7 +117,10 @@ export function highlight(code, langName) {
 const purifyConfig = {
   USE_PROFILES: { html: true },
   ADD_ATTR: ['data-line', 'target'],
-  FORBID_TAGS: ['style', 'script'],
+  // the brief is written by an agent and quotes repository content: no styling that could cover the
+  // app, no forms or buttons that could submit to the viewer server (inputs stay for task lists)
+  FORBID_TAGS: ['style', 'script', 'form', 'button'],
+  FORBID_ATTR: ['style'],
 };
 
 /**

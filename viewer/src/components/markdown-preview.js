@@ -134,8 +134,16 @@ export class MarkdownPreview extends HTMLElement {
   /** Height of the sticky file heading, which covers the top of the viewport inside a card.
    *  Measured on a heading that is laid out: one in a skipped card reports 0. */
   #stickyOffset() {
-    for (const h2 of this.#article.querySelectorAll('section.rb-file > h2')) if (h2.offsetHeight) return h2.offsetHeight;
-    return 0;
+    // the tallest laid-out heading: a wrapped path makes one card's bar taller than the others
+    let max = 0;
+    for (const h2 of this.#article.querySelectorAll('section.rb-file > h2')) max = Math.max(max, h2.offsetHeight);
+    return max;
+  }
+
+  /** Height of the sticky heading of the card a block sits in (0 outside cards). */
+  #stickyOf(block) {
+    const h2 = block.card?.querySelector(':scope > h2');
+    return h2 && h2 !== block.el ? h2.offsetHeight : 0;
   }
 
   // Scroll-spy. Units and file cards carry data-spy-line and tile the document, so the one crossing
@@ -183,15 +191,19 @@ export class MarkdownPreview extends HTMLElement {
       if (!c) { c = { rendered: this.#rendered(b.card), top: this.#topOf(b.card) }; cards.set(b.card, c); }
       return c.rendered ? this.#topOf(b.el) : c.top;
     });
+    // inside a card the sticky heading covers the top of the viewport: the block being read is the one
+    // just below it, which is also the block scrollToLine places there (it subtracts the same height)
     let i = 0;
     while (i + 1 < blocks.length && tops[i + 1] <= scrollTop) i++;
+    const at = scrollTop + this.#stickyOf(blocks[i]);
+    while (i + 1 < blocks.length && tops[i + 1] <= at) i++;
     const cur = blocks[i];
     const next = blocks[i + 1];
     if (!next) {
       const span = Math.max(1, this.scrollHeight - tops[i]);
-      return { line: cur.line, fraction: Math.min(1, Math.max(0, (scrollTop - tops[i]) / span)), lineSpan: 1 };
+      return { line: cur.line, fraction: Math.min(1, Math.max(0, (at - tops[i]) / span)), lineSpan: 1 };
     }
-    const ratio = Math.min(1, Math.max(0, (scrollTop - tops[i]) / Math.max(1, tops[i + 1] - tops[i])));
+    const ratio = Math.min(1, Math.max(0, (at - tops[i]) / Math.max(1, tops[i + 1] - tops[i])));
     const lineSpan = next.line - cur.line;
     return { line: cur.line + ratio * lineSpan, fraction: 0 };
   }
