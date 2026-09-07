@@ -64,7 +64,7 @@ scripts/selftest.sh      builds a fixture repo and checks the unit table
 scripts/e2e.mjs          browser test of the viewer (needs Playwright and Chrome; optional)
 scripts/viewer.ts        localhost server: serves viewer/ + GET/PUT /brief and /briefs/<key> + GET /file + POST /switch, /stop
 viewer/                  the xor editor (vim mode, markdown preview, brief mode); this is its only copy
-rules/<lang>/units.yml   ast-grep rules per language: twelve directories, plus rules/typescript/units-tsx.yml for TSX
+rules/<lang>/units.yml   ast-grep rules per language: eighteen directories, plus rules/typescript/units-tsx.yml for TSX
 sgconfig.yml             ast-grep project config pointing at rules/
 references/spec.md       the specification
 references/example-brief.md
@@ -121,8 +121,12 @@ in the editor at the line — read-only, at the version the brief describes
 (the commit in `commit` mode, otherwise the working tree). Browser back
 returns to the brief; middle-click opens the file in a new tab.
 
-Languages with unit rules: TypeScript, TSX, JavaScript, Java, Python, Kotlin (incl. `.kts` build scripts), Go, Lua, Bash, HTML (elements with an id, script, style), CSS (rule sets, @-rules), YAML (keys two levels deep, named list items), Markdown (sections). Any other file type is briefed as a whole file — its diff under the file's File Context/Changes.
+Languages with unit rules: TypeScript, TSX, JavaScript, Java, Python, Kotlin (incl. `.kts` build scripts), Go, Lua, C, C++, C#, Rust, Haskell, Bash, HTML (elements with an id, script, style), CSS (rule sets, @-rules), YAML and JSON (keys two levels deep, named list items), Markdown (sections). Any other file type is briefed as a whole file — its diff under the file's File Context/Changes.
 
 Adding a language: add `rules/<lang>/units.yml` (one rule per unit kind, ids
 prefixed `<lang>-`), list the directory in `sgconfig.yml`, and add the file
-extensions to `LANG_BY_EXT` / `CALLER_LANGS` in `extract.ts`.
+extensions to `LANG_BY_EXT` / `CALLER_LANGS` in `extract.ts`. A language whose
+calls or declarations do not look like TS or Java also needs a `DECL_RE`
+entry, a `callerPatterns` case and a reach rule in `restrictSites` there, and
+any new unit kinds a word in `KIND_WORD` (`brief-format.ts`) and, if they are
+referenced rather than called, a place in `TYPE_KINDS`; spec §8.3 lists the steps.

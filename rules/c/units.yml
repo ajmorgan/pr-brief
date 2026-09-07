@@ -1,0 +1,180 @@
+# C units. A function's name sits at the bottom of a declarator chain (pointer_declarator wraps
+# function_declarator for `struct P *mk(void)`), so the search for it runs to the end. A prototype
+# (a header's API) is a unit when its file has no definition of the name; next to its definition
+# it is not, so a static helper declared at the top of a .c file is one unit, not two. A function
+# declared inside another's body is part of that function.
+id: c-function
+language: C
+rule:
+  kind: function_definition
+  all:
+    - has:
+        field: declarator
+        stopBy: end
+        kind: function_declarator
+        has: { field: declarator, kind: identifier, pattern: $NAME }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+---
+id: c-function.prototype
+language: C
+rule:
+  kind: declaration
+  all:
+    - has:
+        field: declarator
+        stopBy: end
+        kind: function_declarator
+        has: { field: declarator, kind: identifier, pattern: $NAME }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+    - not: # the file defines it: that definition is the unit
+        inside:
+          kind: translation_unit
+          stopBy: end
+          has:
+            kind: function_definition
+            stopBy: end
+            has: { field: declarator, stopBy: end, kind: function_declarator, has: { field: declarator, kind: identifier, pattern: $NAME } }
+---
+id: c-function.macro
+language: C
+rule:
+  kind: preproc_function_def
+  has: { field: name, pattern: $NAME }
+---
+# a struct/union/enum with a body: `struct P { … };` at file level, or `typedef struct P { … } P;`
+# (the whole typedef is the unit, named by the tag, or by the typedef name when the tag is missing)
+id: c-struct
+language: C
+rule:
+  kind: struct_specifier
+  all:
+    - has: { field: name, pattern: $NAME }
+    - has: { field: body, kind: field_declaration_list }
+    - not: { inside: { kind: type_definition } } # the typedef is the unit, below
+    - not: { inside: { kind: field_declaration_list, stopBy: end } } # a struct nested in a struct is part of it
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+---
+id: c-struct.typedef
+language: C
+rule:
+  kind: type_definition
+  has:
+    field: type
+    kind: struct_specifier
+    all:
+      - has: { field: name, pattern: $NAME }
+      - has: { field: body, kind: field_declaration_list }
+---
+id: c-struct.anonymous
+language: C
+rule:
+  kind: type_definition
+  all:
+    - has:
+        field: type
+        kind: struct_specifier
+        all:
+          - not: { has: { field: name, kind: type_identifier } }
+          - has: { field: body, kind: field_declaration_list }
+    - has: { field: declarator, kind: type_identifier, pattern: $NAME }
+---
+id: c-union
+language: C
+rule:
+  kind: union_specifier
+  all:
+    - has: { field: name, pattern: $NAME }
+    - has: { field: body, kind: field_declaration_list }
+    - not: { inside: { kind: type_definition } } # the typedef is the unit, below
+    - not: { inside: { kind: field_declaration_list, stopBy: end } } # a struct nested in a struct is part of it
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+---
+id: c-union.typedef
+language: C
+rule:
+  kind: type_definition
+  has:
+    field: type
+    kind: union_specifier
+    all:
+      - has: { field: name, pattern: $NAME }
+      - has: { field: body, kind: field_declaration_list }
+---
+id: c-union.anonymous
+language: C
+rule:
+  kind: type_definition
+  all:
+    - has:
+        field: type
+        kind: union_specifier
+        all:
+          - not: { has: { field: name, kind: type_identifier } }
+          - has: { field: body, kind: field_declaration_list }
+    - has: { field: declarator, kind: type_identifier, pattern: $NAME }
+---
+id: c-enum
+language: C
+rule:
+  kind: enum_specifier
+  all:
+    - has: { field: name, pattern: $NAME }
+    - has: { field: body, kind: enumerator_list }
+    - not: { inside: { kind: type_definition } }
+    - not: { inside: { kind: field_declaration_list, stopBy: end } }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+---
+id: c-enum.typedef
+language: C
+rule:
+  kind: type_definition
+  has:
+    field: type
+    kind: enum_specifier
+    all:
+      - has: { field: name, pattern: $NAME }
+      - has: { field: body, kind: enumerator_list }
+---
+id: c-enum.anonymous
+language: C
+rule:
+  kind: type_definition
+  all:
+    - has:
+        field: type
+        kind: enum_specifier
+        all:
+          - not: { has: { field: name, kind: type_identifier } }
+          - has: { field: body, kind: enumerator_list }
+    - has: { field: declarator, kind: type_identifier, pattern: $NAME }
+---
+# any other typedef: `typedef int (*cb_t)(int)`, `typedef struct Node Node`
+id: c-type
+language: C
+rule:
+  kind: type_definition
+  all:
+    - has: { field: declarator, stopBy: end, kind: type_identifier, pattern: $NAME }
+    - not:
+        has:
+          field: type
+          any:
+            - { kind: struct_specifier, has: { field: body, kind: field_declaration_list } }
+            - { kind: union_specifier, has: { field: body, kind: field_declaration_list } }
+            - { kind: enum_specifier, has: { field: body, kind: enumerator_list } }
+---
+# a file-level variable, and an object-like macro
+id: c-const
+language: C
+rule:
+  kind: declaration
+  all:
+    - not: { inside: { kind: compound_statement, stopBy: end } } # a local, not a unit (an #ifdef block at file level is fine)
+    - has: { field: declarator, stopBy: end, kind: identifier, pattern: $NAME }
+    - not: { has: { field: declarator, stopBy: end, kind: function_declarator } }
+---
+id: c-const.macro
+language: C
+rule:
+  kind: preproc_def
+  has: { field: name, pattern: $NAME }

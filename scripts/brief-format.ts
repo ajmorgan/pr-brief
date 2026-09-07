@@ -14,6 +14,7 @@ export const CALLABLE_KINDS = new Set(["function", "method", "constructor", "arr
 export const KIND_WORD: Record<string, string> = {
   function: "Function", arrow: "Function", method: "Method", constructor: "Constructor",
   class: "Class", interface: "Interface", enum: "Enum", record: "Record", annotation: "Annotation", object: "Object", type: "Type", namespace: "Namespace",
+  struct: "Struct", union: "Union", trait: "Trait", impl: "Impl", module: "Module", macro: "Macro", data: "Data type", instance: "Instance", delegate: "Delegate",
   const: "Const", field: "Field",
   section: "Section", key: "Key", item: "Item", doc: "Document", rule: "Rule", element: "Element", script: "Script", style: "Style", block: "Block",
 };

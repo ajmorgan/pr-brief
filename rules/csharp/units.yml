@@ -1,0 +1,97 @@
+# C# units. Attributes ([Fact], [Obsolete]) are children of the declaration, so they belong to it.
+# A local function (local_function_statement) and a lambda are part of the method around them.
+id: cs-method
+language: CSharp
+rule:
+  kind: method_declaration
+  has: { field: name, pattern: $NAME }
+---
+id: cs-constructor
+language: CSharp
+rule:
+  kind: constructor_declaration
+  has: { field: name, pattern: $NAME }
+---
+id: cs-constructor.destructor
+language: CSharp
+rule:
+  kind: destructor_declaration
+  has: { field: name, pattern: $NAME }
+---
+# `public static Svc operator +(Svc a, Svc b)`, `public static implicit operator int(Svc s)`: the
+# operator token is anonymous in the grammar, so symbols.ts names these from the line (operator+, operator int)
+id: cs-method.operator
+language: CSharp
+rule:
+  kind: operator_declaration
+---
+id: cs-method.conversion
+language: CSharp
+rule:
+  kind: conversion_operator_declaration
+---
+id: cs-class
+language: CSharp
+rule:
+  kind: class_declaration
+  has: { field: name, pattern: $NAME }
+---
+id: cs-struct
+language: CSharp
+rule:
+  kind: struct_declaration
+  has: { field: name, pattern: $NAME }
+---
+id: cs-interface
+language: CSharp
+rule:
+  kind: interface_declaration
+  has: { field: name, pattern: $NAME }
+---
+id: cs-enum
+language: CSharp
+rule:
+  kind: enum_declaration
+  has: { field: name, pattern: $NAME }
+---
+id: cs-record
+language: CSharp
+rule:
+  kind: record_declaration
+  has: { field: name, pattern: $NAME }
+---
+id: cs-delegate
+language: CSharp
+rule:
+  kind: delegate_declaration
+  has: { field: name, pattern: $NAME }
+---
+# a block namespace is a container; a file-scoped one (`namespace App.Core;`) has no body to contain
+id: cs-namespace
+language: CSharp
+rule:
+  kind: namespace_declaration
+  has: { field: name, pattern: $NAME }
+---
+id: cs-field
+language: CSharp
+rule:
+  any:
+    - kind: field_declaration
+    - kind: event_field_declaration
+  has:
+    kind: variable_declaration
+    has: { kind: variable_declarator, has: { field: name, pattern: $NAME } }
+---
+id: cs-field.property
+language: CSharp
+rule:
+  any:
+    - kind: property_declaration
+    - kind: event_declaration
+  has: { field: name, pattern: $NAME }
+---
+id: cs-field.indexer
+language: CSharp
+rule:
+  kind: indexer_declaration

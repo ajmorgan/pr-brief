@@ -11,3 +11,9 @@ ruleDirs:
   - rules/css
   - rules/yaml
   - rules/markdown
+  - rules/c
+  - rules/cpp
+  - rules/csharp
+  - rules/rust
+  - rules/haskell
+  - rules/json

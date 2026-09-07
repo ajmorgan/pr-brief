@@ -29,8 +29,17 @@ function main(): void {
   else if (arg) {
     const real = (p: string): string => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } }; // /var vs /private/var: one file, two spellings
     const want = new Set([real(arg), real(path.resolve(root, arg))]);
-    const dirs = fs.existsSync(stateRoot) ? fs.readdirSync(stateRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(stateRoot, e.name)) : [];
-    stateDir = dirs.find((d) => { const o = unitsOf(d)?.out; return typeof o === "string" && want.has(real(o)); }) ?? null;
+    const claims = (d: string): boolean => { const o = unitsOf(d)?.out; return typeof o === "string" && want.has(real(o)); };
+    // the brief names its own key in its front matter: that directory is its state. A stale directory left by an
+    // earlier layout or an abandoned run may claim the same path; when the key does not settle it, the newest wins
+    const briefPath = [arg, path.resolve(root, arg)].find((p) => fs.existsSync(p));
+    const key = briefPath ? parseBrief(fs.readFileSync(briefPath, "utf8").slice(0, 4096)).front.key : null;
+    if (typeof key === "string" && claims(path.join(stateRoot, key))) stateDir = path.join(stateRoot, key);
+    else {
+      const dirs = fs.existsSync(stateRoot) ? fs.readdirSync(stateRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(stateRoot, e.name)).filter(claims) : [];
+      const when = (d: string): number => Date.parse(unitsOf(d)?.generated ?? "") || 0;
+      stateDir = dirs.sort((a, b) => when(b) - when(a))[0] ?? null;
+    }
     if (!stateDir) { process.stderr.write(`no extract state for ${arg} — run extract.ts first\n`); process.exit(1); }
   } else {
     const last = fs.existsSync(path.join(stateRoot, "last")) ? fs.readFileSync(path.join(stateRoot, "last"), "utf8").trim() : "";

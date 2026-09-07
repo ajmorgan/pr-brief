@@ -205,6 +205,87 @@ import React from "react";
 export function App(): JSX.Element { return <div>hi</div>; }
 export const Item = ({ n }: { n: number }) => <li>{n}</li>;
 EOF2
+cat > l.c <<'EOF2'
+#define LIMIT 10
+struct Point { int x, y; };
+static int helper(int x);
+int add(int a, int b) { return a + b; }
+static int helper(int x) { return x; }
+EOF2
+cat > m.hpp <<'EOF2'
+namespace app {
+class Svc {
+public:
+    Svc(int p);
+    Svc() : port_(0) {}
+    int save(int o) const;
+    int port() const { return port_; }
+private:
+    int port_;
+};
+}
+EOF2
+cat > m.cpp <<'EOF2'
+#include "m.hpp"
+namespace app {
+Svc::Svc(int p) : port_(p) {}
+int Svc::save(int o) const {
+    auto f = [](int q) { return q; };
+    return f(o);
+}
+template <typename T> T ident(T x) { return x; }
+}
+EOF2
+cat > n.cs <<'EOF2'
+namespace App {
+    public record Order(int Id);
+    public class Svc {
+        private readonly int limit = 5;
+        public Svc(int p) { }
+        public bool Save(Order o) {
+            int Local(int x) => x;
+            return true;
+        }
+    }
+}
+EOF2
+cat > o.rs <<'EOF2'
+pub struct Server { port: u16 }
+pub trait Runner { fn run(&self) -> bool; }
+impl Server {
+    pub fn new(port: u16) -> Self { Server { port } }
+}
+impl Runner for Server {
+    fn run(&self) -> bool { true }
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn it_works() { assert!(true); }
+}
+EOF2
+cat > p.hs <<'EOF2'
+module P where
+data Color = Red | Green
+fact :: Int -> Int
+fact 0 = 1
+fact n = n * fact (n - 1)
+main :: IO ()
+main = print (fact 3)
+  where helper = 3
+EOF2
+cat > q.json <<'EOF2'
+{
+  "name": "pkg",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "bash t.sh"
+  },
+  "workflows": [
+    { "name": "ci", "on": "push" }
+  ]
+}
+EOF2
 cp -R "$FX/src" "$TMP/src-edited" && cp "$FX/app.yaml" "$TMP/app.yaml-edited"   # the wip change set, restored after the language commits
 cd "$FX" && git add -A && git commit -qm langs
 sedi 's/return helper()/return helper() + 1/' lang/a.py
@@ -218,6 +299,13 @@ sedi 's/urls: x/urls: y/' lang/h.yml
 sedi 's/^body$/body text/' lang/i.md
 sedi 's/return a;/return a + 1;/' lang/j.js
 sedi 's/<div>hi<\/div>/<div>hello<\/div>/' lang/k.tsx
+sedi 's/static int helper(int x) { return x; }/static int helper(int x) { return x + 1; }/' lang/l.c
+sedi 's/return f(o);/return f(o) + 1;/' lang/m.cpp
+sedi 's/return port_; }/return port_ + 0; }/; s/int port_;/int port_ = 0;/' lang/m.hpp   # an inline method and a field; the inline constructor and the declared save stay
+sedi 's/return true;/return o != null;/' lang/n.cs
+sedi 's/fn run(&self) -> bool { true }/fn run(\&self) -> bool { false }/' lang/o.rs
+sedi 's/fact n = n \* fact (n - 1)/fact n = n * fact (n - 1) + 0/' lang/p.hs
+sedi 's/"build": "node build.mjs"/"build": "node build.mjs --prod"/' lang/q.json
 expected2="modified function lang/a.py#Svc.save
 modified function lang/b.kt#Svc.save
 new function lang/b.kt#extra
@@ -229,7 +317,15 @@ modified rule lang/g.css#@media (max-width: 800px)..app
 modified key lang/h.yml#spring.ldap
 modified section lang/i.md#Title.Section A.Sub A1
 modified function lang/j.js#plain
-modified function lang/k.tsx#App"
+modified function lang/k.tsx#App
+modified function lang/l.c#helper
+modified method lang/m.cpp#app.Svc.save
+modified method lang/m.hpp#app.Svc.port
+modified field lang/m.hpp#app.Svc.port_
+modified method lang/n.cs#App.Svc.Save
+modified method lang/o.rs#Runner for Server.run
+modified function lang/p.hs#fact
+modified key lang/q.json#scripts.build"
 actual2="$(node "$SK/scripts/extract.ts" --list --path lang | awk -F'  +' '{ print $1, $2, $3 }')"   # columns are two-space separated; ids may contain spaces
 if [ "$actual2" != "$expected2" ]; then
   echo "FAIL: language unit table differs"; echo "--- expected"; echo "$expected2"; echo "--- actual"; echo "$actual2"; exit 1
@@ -294,6 +390,17 @@ node -e 'const fs=require("fs");const B=process.argv[1];fs.writeFileSync(B,fs.re
 grep -q $'\r' "$BRIEF" || { echo "FAIL: test setup: CRLF conversion did nothing"; exit 1; }
 node "$SK/scripts/lint.ts" >/dev/null || { echo "FAIL: lint rejected a CRLF brief"; exit 1; }
 grep -q $'\r' "$BRIEF" && { echo "FAIL: lint left CRLF line endings in the brief"; exit 1; }
+# a stale state directory (an abandoned run under another key) that claims this brief's path must not be the one
+# lint checks against: the brief's own key decides, and among strangers the newest units.json
+mkdir -p .git/pr-brief/aaa-stale && node -e '
+const fs=require("fs"); const j=JSON.parse(fs.readFileSync(".git/pr-brief/main/units.json","utf8"));
+j.expected=["## `nothing.ts` — modified"]; j.generated="2020-01-01T00:00:00.000Z"; fs.writeFileSync(".git/pr-brief/aaa-stale/units.json", JSON.stringify(j));'
+node "$SK/scripts/lint.ts" "$BRIEF" >/dev/null || { echo "FAIL: lint checked the brief against a stale state directory that claims its path"; exit 1; }
+node -e '
+const fs=require("fs"); const j=JSON.parse(fs.readFileSync(".git/pr-brief/main/units.json","utf8")); fs.writeFileSync(".git/pr-brief/aaa-stale/units.json", JSON.stringify({ ...j, key: "aaa-stale", generated: "2020-01-01T00:00:00.000Z", expected: ["## `nothing.ts` — modified"] }));
+const b=fs.readFileSync(process.argv[1],"utf8"); fs.writeFileSync(process.argv[1], b.replace(/^key: main$/m, "key: gone"));' "$BRIEF"   # no directory carries the brief's key: the newest claimant wins
+node "$SK/scripts/lint.ts" "$BRIEF" >/dev/null || { echo "FAIL: lint preferred an older stale state directory over the newest one"; exit 1; }
+sedi 's/^key: gone$/key: main/' "$BRIEF" && rm -rf .git/pr-brief/aaa-stale
 # second run must carry everything over — and there must be units to carry, each keeping its own prose
 out="$(node "$SK/scripts/extract.ts")"
 case "$out" in *"0 slots to fill"*"units carried over)"*) ;; *) echo "FAIL: rerun did not carry over: $out"; exit 1 ;; esac

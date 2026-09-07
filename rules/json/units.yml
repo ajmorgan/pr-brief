@@ -1,0 +1,27 @@
+# JSON units, shaped like the YAML ones: keys one and two levels deep ("scripts" and
+# "scripts.build"), and array items that carry a "name" or "id". Keys inside an array item belong
+# to the item; anything deeper than two levels belongs to its level-two key.
+id: json-key
+language: Json
+rule:
+  kind: pair
+  all:
+    - has: { field: key, pattern: $NAME }
+    - not: # deeper than two levels of object
+        inside:
+          kind: pair
+          stopBy: end
+          inside: { kind: pair, stopBy: end }
+    - not: { inside: { kind: array, stopBy: end } }
+---
+id: json-item
+language: Json
+rule:
+  kind: object
+  all:
+    - inside: { kind: array }
+    - has:
+        kind: pair
+        all:
+          - has: { field: key, regex: '^"(name|id)"$' }
+          - has: { field: value, pattern: $NAME }

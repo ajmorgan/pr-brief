@@ -19,7 +19,7 @@ import type { Sym } from "./symbols.ts";
 const SG_MIN = [0, 30, 0];
 const NODE_MIN = [22, 18]; // unflagged type stripping; an older node fails to load this .ts file before the check can run
 const CALLER_CAP = 20;
-const TYPE_KINDS = new Set(["class", "interface", "enum", "record", "annotation", "type", "object"]);
+const TYPE_KINDS = new Set(["class", "interface", "enum", "record", "annotation", "type", "object", "struct", "union", "trait", "delegate", "data"]);
 const DEFAULT_BASE = "origin/main";
 const DEFAULT_FULL_FN_MAX = 150; // full-body diff up to this many lines, or when a third of the body changed; 0 = always
 const STATE_DIR = "pr-brief"; // under the repository's common git directory: .git, or .bare beside worktrees
@@ -102,11 +102,19 @@ const LANG_BY_EXT: Record<string, string> = {
   ".css": "css",
   ".yml": "yaml", ".yaml": "yaml",
   ".md": "markdown", ".markdown": "markdown",
+  // the same extensions ast-grep itself maps: a bare .h is C, .hxx is nothing
+  ".c": "c", ".h": "c",
+  ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp", ".hpp": "cpp", ".hh": "cpp",
+  ".cs": "csharp",
+  ".rs": "rust",
+  ".hs": "haskell",
+  ".json": "json",
 };
 const CALLER_LANGS: Record<string, string[]> = {
   typescript: ["TypeScript", "Tsx"], tsx: ["TypeScript", "Tsx"], javascript: ["JavaScript"], java: ["Java"],
   python: ["Python"], kotlin: ["Kotlin"], go: ["Go"], lua: ["Lua"],
-  bash: [], html: [], css: [], yaml: [], markdown: [], // no call syntax to search
+  c: ["C"], cpp: ["Cpp"], csharp: ["CSharp"], rust: ["Rust"], haskell: ["Haskell"],
+  bash: [], html: [], css: [], yaml: [], markdown: [], json: [], // no call syntax to search
 };
 function langOf(p: string): string | null {
   return LANG_BY_EXT[path.extname(p).toLowerCase()] ?? null;
@@ -530,18 +538,20 @@ function renderHunk(f: FileEntry, u: Unit, fullFnMax: number): string {
 
 function findCallers(sg: string, files: FileEntry[], rev: string | null): void {
   const targets: { u: Unit; f: FileEntry; lang: string }[] = [];
-  // a language with no call syntax to search (bash, html, css, yaml, markdown) gets no Callers line at all
-  for (const f of files) for (const u of f.units) if (f.lang && CALLER_LANGS[f.lang]?.length && CALLABLE_KINDS.has(u.kind) && u.status !== "new") targets.push({ u, f, lang: f.lang });
-  // a constructor is called by its class name; `new` exists in Java/TS/JS only
+  // a constructor is called by its class name; `new` exists in Java/TS/JS/C# (C++ has both forms, see callerPatterns)
   const ctorName = (u: Unit) => (u.name === "constructor" ? u.scope.split(".").pop() ?? u.name : u.name);
-  const hasNew = (lang: string) => lang === "java" || lang === "typescript" || lang === "tsx" || lang === "javascript";
+  const hasNew = (lang: string) => lang === "java" || lang === "typescript" || lang === "tsx" || lang === "javascript" || lang === "csharp";
+  // a language with no call syntax to search (bash, html, css, yaml, markdown, json) gets no Callers line at all;
+  // nor does a unit whose name is no identifier (a C++ destructor `~Svc`, an `operator+`): there is no pattern to search for it
+  for (const f of files) for (const u of f.units) if (f.lang && CALLER_LANGS[f.lang]?.length && CALLABLE_KINDS.has(u.kind) && u.status !== "new" && /^[A-Za-z_$][\w$]*$/.test(u.kind === "constructor" ? ctorName(u) : u.name)) targets.push({ u, f, lang: f.lang });
   findTypeReferences(files, rev);
   if (rev) {
     // historical commit: the working tree may be far ahead, so search the commit's tree by name with git grep
     const exts = Object.keys(LANG_BY_EXT);
     for (const { u, f, lang } of targets) {
-      // POSIX ERE (no \b): a name not preceded by an identifier character
-      const pat = u.kind === "constructor" ? (hasNew(lang) ? `new[[:space:]]+${ctorName(u)}[[:space:]]*\\(` : `(^|[^A-Za-z0-9_$.])${ctorName(u)}[[:space:]]*\\(`) : `(^|[^A-Za-z0-9_$])${u.name}[[:space:]]*\\(`;
+      // POSIX ERE (no \b): a name not preceded by an identifier character; a Haskell call has no parentheses
+      const pat = lang === "haskell" ? `(^|[^A-Za-z0-9_'])${u.name}([^A-Za-z0-9_']|$)`
+        : u.kind === "constructor" ? (hasNew(lang) ? `new[[:space:]]+${ctorName(u)}[[:space:]]*\\(` : `(^|[^A-Za-z0-9_$.])${ctorName(u)}[[:space:]]*\\(`) : `(^|[^A-Za-z0-9_$])${u.name}[[:space:]]*\\(`;
       const out = gitOk(["grep", "-n", "-E", pat, rev, "--", SCOPE]) ?? "";
       const sites = new Set<string>();
       for (const line of out.split("\n")) {
@@ -563,10 +573,7 @@ function findCallers(sg: string, files: FileEntry[], rev: string | null): void {
   });
   const sitesById = new Map<string, Set<string>>();
   for (const [L, list] of byLang) {
-    const rules = list.map(({ u, rid }) => {
-      const pats = u.kind === "constructor" ? (hasNew(L) ? [`new ${ctorName(u)}($$$)`] : [`${ctorName(u)}($$$)`]) : [`${u.name}($$$)`, `$OBJ.${u.name}($$$)`];
-      return `id: ${rid}\nlanguage: ${L}\nrule:\n  any:\n${pats.map((p) => `    - pattern: ${JSON.stringify(p)}`).join("\n")}`;
-    }).join("\n---\n");
+    const rules = list.map(({ u, rid }) => `id: ${rid}\nlanguage: ${L}\nrule:\n  any:\n${callerPatterns(L, u.kind === "constructor" ? ctorName(u) : u.name, u.kind === "constructor").map((p) => `    - ${p}`).join("\n")}`).join("\n---\n");
     const r = spawnSync(sg, ["scan", "--json=compact", "--inline-rules", rules, SCOPE], { cwd: ROOT, encoding: "utf8", maxBuffer: 1 << 28 });
     if (r.status !== 0) continue;
     const ridToUnit = new Map(list.map(({ u, rid }) => [rid, u]));
@@ -585,6 +592,24 @@ function findCallers(sg: string, files: FileEntry[], rev: string | null): void {
   }
 }
 
+// The ast-grep rules (YAML lines) that find calls of `name` in language L. A bare `f(x)` is not a
+// statement of its own in C, C++ or C#, so those take the context form; C++ and Rust also call through
+// `->` and `::`; a Haskell call is an application with no parentheses, so any use of the name counts
+// except the name position of a declaration (a signature, an equation) — that is the declaration itself.
+function callerPatterns(L: string, name: string, ctor: boolean): string[] {
+  const withNew = L === "Java" || L === "TypeScript" || L === "Tsx" || L === "JavaScript"; // C# and C++ have their own forms below
+  const ctx = (body: string, selector: string) => `pattern: { context: ${JSON.stringify(L === "CSharp" ? `class Q { void M() { ${body}; } }` : `void f() { ${body}; }`)}, selector: ${selector} }`;
+  const plain = (p: string) => `pattern: ${JSON.stringify(p)}`;
+  if (L === "Haskell") return [`kind: variable\n      regex: ${JSON.stringify(`^${name}$`)}\n      not: { inside: { any: [ { kind: function }, { kind: bind }, { kind: signature } ] } }`];
+  if (L === "C" || L === "Cpp") {
+    if (ctor) return L === "Cpp" ? [ctx(`new ${name}($$$)`, "new_expression"), ctx(`new $T::${name}($$$)`, "new_expression"), ctx(`${name}($$$)`, "call_expression"), ctx(`$T::${name}($$$)`, "call_expression")] : [ctx(`${name}($$$)`, "call_expression")];
+    return [ctx(`${name}($$$)`, "call_expression"), ctx(`$OBJ.${name}($$$)`, "call_expression"), ctx(`$OBJ->${name}($$$)`, "call_expression"), ...(L === "Cpp" ? [ctx(`$T::${name}($$$)`, "call_expression")] : [])];
+  }
+  if (L === "CSharp") return ctor ? [ctx(`new ${name}($$$)`, "object_creation_expression")] : [ctx(`${name}($$$)`, "invocation_expression"), ctx(`$OBJ.${name}($$$)`, "invocation_expression")];
+  if (ctor) return [plain(withNew ? `new ${name}($$$)` : `${name}($$$)`)];
+  return [plain(`${name}($$$)`), plain(`$OBJ.${name}($$$)`), ...(L === "Rust" ? [plain(`$T::${name}($$$)`)] : [])];
+}
+
 // Name matching cannot tell which `main` a call binds to. Two cheap corrections make the common wrong
 // cases honest: a declaration that other files cannot call (not exported in TS/JS, private in Java, Kotlin
 // or TS, unexported in Go) keeps only the sites that could reach it; and a file that declares the same
@@ -600,8 +625,13 @@ const DECL_RE: Record<string, (n: string) => RegExp> = {
   go: (n) => new RegExp(`^func\\s+(\\([^)]*\\)\\s*)?${n}\\s*[(\\[]`, "m"),
   python: (n) => new RegExp(`^\\s*(async\\s+)?def\\s+${n}\\s*\\(`, "m"),
   lua: (n) => new RegExp(`\\bfunction\\s+([\\w.:]+[.:])?${n}\\s*\\(|\\b${n}\\s*=\\s*function\\b`),
+  // a type (or `*`, `&`, `>`) before the name, a parameter list, then `{` or `;` (a prototype): `return f(x);` and `ok = f(x);` have none
+  c: (n) => new RegExp(`^(?!\\s*(return|else|do|case|goto)\\b)[^;(){}#=]*[\\w>*&\\]]\\s*\\**&?\\s*(\\w+::)*${n}\\s*\\([^;{]*\\)\\s*(const\\s*)?(override\\s*)?(noexcept\\s*)?[{;]`, "m"),
+  csharp: (n) => new RegExp(`^(?!\\s*(return|else|await|yield)\\b)[^;(){}=]*[\\w>\\]]\\s+${n}\\s*\\([^;{]*\\)\\s*(=>|\\{|;|where\\b)`, "m"),
+  rust: (n) => new RegExp(`\\bfn\\s+${n}\\s*[(<]`),
+  haskell: (n) => new RegExp(`^${n}\\b[^\\n]*(::|=)`, "m"), // its type signature or an equation, at column 0
 };
-DECL_RE.tsx = DECL_RE.typescript; DECL_RE.javascript = DECL_RE.typescript;
+DECL_RE.tsx = DECL_RE.typescript; DECL_RE.javascript = DECL_RE.typescript; DECL_RE.cpp = DECL_RE.c;
 const fileTextCache = new Map<string, string>();
 function fileText(p: string, rev: string | null): string {
   const key = `${rev ?? "wt"}:${p}`;
@@ -624,7 +654,8 @@ function restrictSites(u: Unit, f: FileEntry, lang: string, raw: Set<string>, re
   // 1. a declaration other files cannot call
   let reach: "file" | "dir" | null = null;
   if (jsLike && topLevel && !/^\s*export\b/.test(decl)) reach = "file";
-  else if ((jsLike || lang === "java" || lang === "kotlin") && /\bprivate\b/.test(decl)) reach = "file";
+  else if ((jsLike || lang === "java" || lang === "kotlin" || lang === "csharp") && /\bprivate\b/.test(decl)) reach = "file";
+  else if ((lang === "c" || lang === "cpp") && u.kind === "function" && /^\s*static\b/.test(decl)) reach = "file"; // a static free function, at file or namespace level (a static member is a method)
   else if (lang === "go" && topLevel && /^[a-z]/.test(u.name)) reach = "dir";
   if (reach) {
     const before = sites.length;

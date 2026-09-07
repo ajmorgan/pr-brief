@@ -1,6 +1,6 @@
 # PR Brief — Skill Specification
 
-> **Status:** v1.2 (2026-09-06, implemented at ~/.claude/skills/pr-brief) — thirteen languages (§6.2a); links (§6.5a); viewer sidebar (§6.5b); same-work cache (§15); decisions through #14 (§11); open questions in §17
+> **Status:** v1.3 (2026-09-07, implemented at ~/.claude/skills/pr-brief) — nineteen languages (§6.2a); links (§6.5a); viewer sidebar (§6.5b); same-work cache (§15); decisions through #14 (§11); open questions in §17
 > **Purpose:** Let a human reviewer come up to speed on a body of agent-written changes, one file at a time, one function at a time, without reading raw diffs cold.
 
 ---
@@ -34,7 +34,7 @@ What this skill does differently: it runs **locally and pre-PR** (uncommitted wo
 - Semantic rename detection. Renamed files come from git (`-M`) and renamed units from a similarity heuristic (§12); nothing deeper.
 - A hosted viewer. Output is Markdown with `path:line` links that GitHub, any editor or the terminal renders; the bundled editor (§18) is a local reader and note-taker for that same file, never a second copy of it.
 - Explaining *why* a change was made.
-- Languages without a rules directory (§6.2a lists the thirteen that have one); they get the whole-file fallback.
+- Languages without a rules directory (§6.2a lists the nineteen that have one); they get the whole-file fallback.
 
 ## 4. Invocation
 
@@ -127,7 +127,15 @@ For each changed text file whose language has unit rules (§6.2a):
 
 ### 6.2a Languages
 
-Unit rules exist for TypeScript, TSX, JavaScript, Java, Python, Kotlin (`.kt`, `.kts`), Go, Lua, Bash, HTML, CSS, YAML and Markdown (`rules/<lang>/units.yml`, listed in `sgconfig.yml`, extensions in `LANG_BY_EXT`). Unit kinds per language: functions/methods/classes and their equivalents for code; for Go a method's unit is scoped by its receiver type; for HTML the units are elements with an `id` plus `<script>`/`<style>`; for CSS each rule set (named by selector) and `@media`/`@supports`/`@keyframes` blocks; for YAML mapping keys one and two levels deep plus list items carrying `name:` or `id:`; for Markdown sections named by heading, nesting by level. Rule ids are `<lang>-<kind>[.<variant>]`: the kind names the unit, a variant only selects another syntactic shape (a decorated Python function is still a `function`). A rule may capture `$SCOPE` to name a unit's scope explicitly; a rule that captures no `$NAME` gets a name from its kind or heading. Callers are searched only in languages with call syntax (not Bash, HTML, CSS, YAML, Markdown). Files in any other language are one whole-file unit with the file's diff (an added file capped at the full-body limit); the heading says "· whole file". ast-grep 0.45 also bundles Bash, C, C++, C#, CSS, Dart, Elixir, Haskell, HCL, Nix, PHP, Ruby, Rust, Scala, Solidity and Swift — each needs only a rules file to join. XML, Groovy/Gradle, TOML and SQL are not bundled and would need a custom tree-sitter grammar.
+Unit rules exist for TypeScript, TSX, JavaScript, Java, Python, Kotlin (`.kt`, `.kts`), Go, Lua, C (`.c`, `.h`), C++ (`.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`), C#, Rust, Haskell, Bash, HTML, CSS, YAML, JSON and Markdown (`rules/<lang>/units.yml`, listed in `sgconfig.yml`, extensions in `LANG_BY_EXT` — the same ones ast-grep maps, so a bare `.h` is C). Unit kinds per language: functions/methods/classes and their equivalents for code; for Go a method's unit is scoped by its receiver type; for HTML the units are elements with an `id` plus `<script>`/`<style>`; for CSS each rule set (named by selector) and `@media`/`@supports`/`@keyframes` blocks; for YAML and JSON mapping keys one and two levels deep plus list items carrying `name:` or `id:`; for Markdown sections named by heading, nesting by level. Rule ids are `<lang>-<kind>[.<variant>]`: the kind names the unit, a variant only selects another syntactic shape (a decorated Python function is still a `function`). A rule may capture `$SCOPE` to name a unit's scope explicitly; a rule that captures no `$NAME` gets a name from its kind or heading. Callers are searched only in languages with call syntax (not Bash, HTML, CSS, YAML, JSON, Markdown). Files in any other language are one whole-file unit with the file's diff (an added file capped at the full-body limit); the heading says "· whole file". ast-grep 0.45 also bundles Dart, Elixir, HCL, Nix, PHP, Ruby, Scala, Solidity and Swift — each needs only a rules file to join. XML, Groovy/Gradle, TOML and SQL are not bundled and would need a custom tree-sitter grammar.
+
+Language notes for the six added in v1.3:
+
+- **C / C++.** Kinds: `function`, `method`, `constructor`, `struct`, `class`, `union`, `enum`, `type` (typedef, `using X =`), `namespace`, `field`, `const` (file-level variables and object-like macros; a function-like macro is a `function`). A `typedef struct P { … } P;` is one unit named by its tag (by the typedef name when the struct is anonymous). An out-of-line C++ definition names its scope from the `Svc::` qualifier (`$SCOPE`; symbols.ts writes `::` as `.`), so it keys as `app.Svc.save`, and `Svc::Svc` is a constructor. Inside a class body the grammar names a definition with a plain identifier whether it is a constructor or a method, so the rules bind the class name and call a definition a constructor only when its name is the class's. A declaration without a body (a prototype, an in-class method declaration) is a unit only when its file does not also define it — for a member, `Class::name` with the declaring class as qualifier (`Outer::Inner::name`, `Box<T>::name` count; a generic argument list is dropped from the scope, so `Box<T>::get` keys as `Box.get`): a header's declarations are units, a static helper's prototype above its definition is not. A destructor (`~Svc`) or operator (`operator+`) has no identifier to search for, so it gets no Callers line. A `static` free function, at file or namespace level, is reachable only from its file (§6.5). A bare `f(x)` is not a statement of its own in these grammars, so the caller rules use ast-grep's `context`/`selector` pattern form, and C++ also searches `->` and `::` calls and `new Svc(`.
+- **C#.** Kinds: `method`, `constructor` (destructors are a variant), `class`, `struct`, `interface`, `enum`, `record`, `delegate`, `namespace` (a block namespace; a file-scoped `namespace X;` has no body to contain), `field` (fields, events, properties, indexers). The operator token of an `operator +` declaration is anonymous in the grammar, so symbols.ts names it from the line (`operator+`, `operator int`). Attributes (`[Fact]`) are children of their declaration and belong to it. A local function is part of the method around it. `private` members are reachable only from their file.
+- **Rust.** Kinds: `function` (free, in a `mod`), `method` (in an `impl` or `trait`; a trait's required signature too), `impl` (a container named from its head, "Server" or "Runner for Server", so its methods key as `Runner for Server.run`), `trait`, `struct`, `enum`, `union`, `type`, `module` (an inline `mod x { … }`), `const` (`const` and `static`), `macro`. Outer attributes on the lines above (`#[test]`, `#[derive]`) belong to the item. Callers include `Type::name(` calls. No visibility rule narrows a non-`pub` item's callers: private items are visible to child modules in other files.
+- **Haskell.** Kinds: `function` (a signature, a `bind`, a `function` equation), `data` (`data`, `newtype`), `type` (a synonym), `class`, `instance` (a container named from its head, "Runner Color"). A top-level function is several sibling nodes (its signature and one per equation); symbols.ts merges adjacent same-named siblings into one unit that runs from the signature to the last equation and keeps the signature as its signature. `let`/`where` bindings belong to the enclosing function. A call has no parentheses, so the caller search matches any use of the name other than a declaration's own name position (`kind: variable` with a regex; `git grep` with a word boundary in commit mode, which cannot tell the two apart).
+- **JSON.** Kinds: `key` (one and two levels deep; the quotes are stripped from the name), `item` (an array object carrying `"name"` or `"id"`). Attribution is line-based, so a one-line object credits the smallest key on that line; pretty-printed JSON (package.json, tsconfig) attributes correctly, minified JSON does not, and is usually generated anyway.
 
 ### 6.3 Attribution
 
@@ -153,10 +161,11 @@ Limitation: git diffs are line-based, so two symbols that share a line (a minifi
 
 ### 6.5 Callers
 
-For every `modified` and `deleted` unit of kind `function`/`method`/`constructor`/`arrow`, in a language that has a call syntax to search (Bash, HTML, CSS, YAML and Markdown units carry no Callers line), extract finds call sites across the repo on the new side — for a deleted unit too, since the sites that remain are the ones now broken:
+For every `modified` and `deleted` unit of kind `function`/`method`/`constructor`/`arrow`, in a language that has a call syntax to search (Bash, HTML, CSS, YAML, JSON and Markdown units carry no Callers line), extract finds call sites across the repo on the new side — for a deleted unit too, since the sites that remain are the ones now broken:
 
 - TS/JS: `call_expression` whose function is the identifier `name`, or a `member_expression` whose property is `name`; `new_expression` for classes.
 - Java: `method_invocation` whose name is `name`; `object_creation_expression` for constructors.
+- C, C++, C#: the same shapes in ast-grep's `context`/`selector` pattern form, since a bare call is not a statement in those grammars; C++ and Rust also `->` and `Type::name(` calls; Haskell any use of the name outside a declaration's own name position (`callerPatterns` in `extract.ts`).
 
 Run as an ast-grep rule over the repo, restricted to the same language, excluding the unit's own definition. Result: a list of `path:line`, capped at 20 with a total count. This is **name-based, not type-resolved** — a common method name (`get`, `run`) will over-match. The list is labelled *Callers (by name)* so the reviewer knows what it is. Two cheap corrections make the common wrong cases honest, and the line says when they applied: a declaration other files cannot call (a top-level function that is not `export`ed in TS/JS, a `private` member in Java, Kotlin or TS, an unexported name in Go) keeps only the sites that could reach it; and a file that declares the same name itself is taken to be calling its own, so its sites are dropped (`main` in three scripts lists one caller, not three). Units with zero hits get `Callers: none found`.
 
@@ -186,7 +195,7 @@ The fact table the agent and the lint both read. One record per unit:
 |---|---|
 | `path` | repo-relative |
 | `fileStatus` | `A` `M` `D` `R` |
-| `kind` | code: `function` `method` `constructor` `arrow` `class` `interface` `type` `enum` `record` `annotation` `object` `namespace` `field` `const` `test` `block`; data and markup: `key` `item` `doc` `section` `rule` `element` `script` `style`; buckets: `other` `file` |
+| `kind` | code: `function` `method` `constructor` `arrow` `class` `interface` `type` `enum` `record` `annotation` `object` `namespace` `field` `const` `test` `block` `struct` `union` `trait` `impl` `module` `macro` `data` `instance` `delegate`; data and markup: `key` `item` `doc` `section` `rule` `element` `script` `style`; buckets: `other` `file` |
 | `name` | symbol name, or `(imports)`, `(top-level)`, `(file)` for non-symbol units |
 | `scope` | enclosing names, `.`-joined, may be empty |
 | `status` | `new` `modified` `deleted` |
@@ -398,6 +407,7 @@ Three levels, and a fixed order of work.
 | 10 | links | every path and location is a relative Markdown link; the viewer opens the file read-only at the briefed version | decided 2026-09-06 |
 | 11 | summary block | blockquote of bullets with folded commit message and agent instructions | decided 2026-09-06 |
 | 12 | languages | rules for TS, TSX, JS, Java, Python, Kotlin, Go, Lua, Bash, HTML, CSS, YAML, Markdown; **no** XML, Groovy or Gradle (custom grammars) | decided 2026-09-06 |
+| 12a | languages | C, C++, C#, Rust, Haskell, JSON added (§6.2a); a bodyless declaration is a unit only when its file has no definition | decided 2026-09-07 |
 | 13 | unit layer stays language-agnostic | every symbol a rule finds is a unit; no per-language heuristics (accessor tagging etc.) in extraction | decided 2026-09-06 |
 | 14 | since-last | computed only against a brief of the same work (same commit; or same mode and none of the previous brief's files committed between the two bases); prose carries from any brief or the cache by hash | decided 2026-09-06, tightened 2026-09-07 |
 
@@ -421,7 +431,7 @@ Three levels, and a fixed order of work.
 - ~~Rename detection~~ — implemented, see §12.
 - **`Why:` slot**, clearly separated from `Changes:`, sourced from commit messages when the range is committed.
 - **Reviewer marks**: `- [ ] ok` / `- [ ] flag` per unit, and a companion `/pr-brief-flags` that hands flagged units back to the agent.
-- **More languages**: Zig, Rust, C — one rules directory each (Python and Go are done, §6.2a).
+- **More languages**: Zig needs a custom grammar; Ruby, PHP, Swift, Scala, Dart, Elixir, HCL, Nix are bundled and need one rules directory each (§6.2a).
 - **Ordering by call graph** or entry points.
 
 ## 14. Skill layout
@@ -440,7 +450,7 @@ pr-brief/
     viewer.ts           # localhost server for the bundled editor (§18)
     selftest.sh         # fixture-based regression test
     e2e.mjs             # fixture-based browser test of the viewer (§18); optional, needs Playwright
-  rules/<lang>/units.yml   # typescript (+ units-tsx.yml), javascript, java, python, kotlin, go, lua, bash, html, css, yaml, markdown
+  rules/<lang>/units.yml   # typescript (+ units-tsx.yml), javascript, java, python, kotlin, go, lua, c, cpp, csharp, rust, haskell, bash, html, css, yaml, json, markdown
   references/
     spec.md             # this document
     example-brief.md    # one real brief, regenerated from the fixture

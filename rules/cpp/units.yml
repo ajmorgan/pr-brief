@@ -1,0 +1,412 @@
+# C++ units (.cpp, .cc, .cxx, .hpp, .hh; a bare .h is parsed as C). A function's name sits at the
+# bottom of a declarator chain, so the search runs to the end; an out-of-line definition
+# (`int Svc::save(int) const { … }`) names its scope with $SCOPE, so it keys as Svc.save; `Svc::Svc`
+# is a constructor. A declaration without a body (a prototype, an in-class method declaration) is
+# a unit when its file does not also define it (for a member: `Class::name`, the class being the
+# one that declares it), as a header's is; next to its definition it is not. A template's unit is the whole template_declaration, so `template <…>` belongs to it. A
+# function declared inside another's body (a lambda, a local class) is part of it.
+id: cpp-function
+language: Cpp
+rule:
+  kind: function_definition
+  all:
+    - has:
+        field: declarator
+        stopBy: end
+        kind: function_declarator
+        has: { field: declarator, kind: identifier, pattern: $NAME }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+    - not: { inside: { kind: field_declaration_list, stopBy: end } } # in a class body: a method, below
+    - not: { inside: { kind: template_declaration } }
+---
+id: cpp-function.template
+language: Cpp
+rule:
+  kind: template_declaration
+  all:
+    - has:
+        kind: function_definition
+        has:
+          field: declarator
+          stopBy: end
+          kind: function_declarator
+          has: { field: declarator, kind: identifier, pattern: $NAME }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+    - not: { inside: { kind: field_declaration_list, stopBy: end } }
+---
+# a prototype at file or namespace level: `int add(int, int);`, in a file that does not define add
+id: cpp-function.prototype
+language: Cpp
+rule:
+  kind: declaration
+  all:
+    - has:
+        field: declarator
+        stopBy: end
+        kind: function_declarator
+        has: { field: declarator, kind: identifier, pattern: $NAME }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+    - not: { inside: { kind: field_declaration_list, stopBy: end } }
+    - not:
+        inside:
+          kind: translation_unit
+          stopBy: end
+          has:
+            kind: function_definition
+            stopBy: end
+            has: { field: declarator, stopBy: end, kind: function_declarator, has: { field: declarator, kind: identifier, pattern: $NAME } }
+---
+# `auto f = [](int x) { … };` at file or namespace level
+id: cpp-function.lambda
+language: Cpp
+rule:
+  kind: declaration
+  all:
+    - has:
+        field: declarator
+        kind: init_declarator
+        all:
+          - has: { field: declarator, kind: identifier, pattern: $NAME }
+          - has: { field: value, kind: lambda_expression }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+    - not: { inside: { kind: field_declaration_list, stopBy: end } }
+---
+# out-of-line definition: Svc::save, Svc::~Svc, Svc::operator+, ns::Svc::save (scope keeps its ::)
+id: cpp-method.outofline
+language: Cpp
+rule:
+  kind: function_definition
+  all:
+    - has:
+        field: declarator
+        stopBy: end
+        kind: function_declarator
+        has:
+          field: declarator
+          kind: qualified_identifier
+          all:
+            - has: { field: scope, pattern: $SCOPE }
+            - has:
+                field: name
+                stopBy: end # ns::Svc::save nests qualified_identifiers; the innermost name is the method's
+                any: [ { kind: identifier }, { kind: destructor_name }, { kind: operator_name } ]
+                pattern: $NAME
+            - not: { has: { field: scope, pattern: $NAME } } # Svc::Svc is the constructor, below
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+    - not: { inside: { kind: template_declaration } }
+---
+id: cpp-constructor.outofline
+language: Cpp
+rule:
+  kind: function_definition
+  all:
+    - has:
+        field: declarator
+        stopBy: end
+        kind: function_declarator
+        has:
+          field: declarator
+          kind: qualified_identifier
+          all:
+            - has: { field: scope, pattern: $SCOPE }
+            - has: { field: name, kind: identifier, pattern: $NAME }
+            - has: { field: scope, pattern: $NAME }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+    - not: { inside: { kind: template_declaration } }
+---
+id: cpp-method.outofline-template
+language: Cpp
+rule:
+  kind: template_declaration
+  all:
+    - has:
+        kind: function_definition
+        has:
+          field: declarator
+          stopBy: end
+          kind: function_declarator
+          has:
+            field: declarator
+            kind: qualified_identifier
+            all:
+              - has: { field: scope, pattern: $SCOPE }
+              - has:
+                  field: name
+                  stopBy: end
+                  any: [ { kind: identifier }, { kind: destructor_name }, { kind: operator_name } ]
+                  pattern: $NAME
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+---
+# a method defined inside a class body. The grammar names an in-class definition with a plain
+# identifier whether or not it is a constructor, so a constructor is told by its name being the
+# class's ($CLASS, bound by the `inside` before the `not` compares it)
+id: cpp-method
+language: Cpp
+rule:
+  kind: function_definition
+  all:
+    - inside:
+        kind: field_declaration_list
+        inside:
+          any: [ { kind: class_specifier }, { kind: struct_specifier }, { kind: union_specifier } ]
+          has: { field: name, pattern: $CLASS }
+    - has:
+        field: declarator
+        stopBy: end
+        kind: function_declarator
+        has:
+          field: declarator
+          any: [ { kind: identifier }, { kind: field_identifier }, { kind: destructor_name }, { kind: operator_name } ]
+          pattern: $NAME
+    - not: { has: { field: declarator, stopBy: end, kind: function_declarator, has: { field: declarator, kind: identifier, pattern: $CLASS } } }
+    - not: { inside: { kind: template_declaration } }
+---
+# a method declared inside a class body, in a file that does not define `Class::name` out of line
+# ($CLASS is bound by the `inside` before the `not` reads it; a nested class's definition is
+# `Outer::Inner::name`, whose innermost qualifier is Inner, and a template's is `Box<T>::name`)
+id: cpp-method.prototype
+language: Cpp
+rule:
+  any:
+    - kind: field_declaration
+    - kind: declaration
+  all:
+    - inside:
+        kind: field_declaration_list
+        inside:
+          any: [ { kind: class_specifier }, { kind: struct_specifier }, { kind: union_specifier } ]
+          has: { field: name, pattern: $CLASS }
+    - has:
+        field: declarator
+        stopBy: end
+        kind: function_declarator
+        has:
+          field: declarator
+          any: [ { kind: field_identifier }, { kind: destructor_name }, { kind: operator_name } ]
+          pattern: $NAME
+    - not: { inside: { kind: template_declaration } }
+    - not:
+        inside:
+          kind: translation_unit
+          stopBy: end
+          has:
+            kind: function_definition
+            stopBy: end
+            has:
+              field: declarator
+              stopBy: end
+              kind: qualified_identifier
+              all:
+                - has: { field: name, pattern: $NAME }
+                - has:
+                    field: scope
+                    any:
+                      - pattern: $CLASS
+                      - kind: template_type
+                        has: { field: name, pattern: $CLASS }
+---
+id: cpp-method.template
+language: Cpp
+rule:
+  kind: template_declaration
+  all:
+    - inside:
+        kind: field_declaration_list
+        inside:
+          any: [ { kind: class_specifier }, { kind: struct_specifier }, { kind: union_specifier } ]
+          has: { field: name, pattern: $CLASS }
+    - has:
+        any: [ { kind: field_declaration }, { kind: declaration }, { kind: function_definition } ]
+        has:
+          field: declarator
+          stopBy: end
+          kind: function_declarator
+          has:
+            field: declarator
+            any: [ { kind: identifier }, { kind: field_identifier }, { kind: destructor_name }, { kind: operator_name } ]
+            pattern: $NAME
+    - not: { has: { stopBy: end, kind: function_declarator, has: { field: declarator, kind: identifier, pattern: $CLASS } } }
+---
+# a templated constructor: `template <class U> Svc(U u)` in the class body
+id: cpp-constructor.template
+language: Cpp
+rule:
+  kind: template_declaration
+  all:
+    - inside:
+        kind: field_declaration_list
+        inside:
+          any: [ { kind: class_specifier }, { kind: struct_specifier }, { kind: union_specifier } ]
+          has: { field: name, pattern: $CLASS }
+    - has:
+        any: [ { kind: declaration }, { kind: function_definition } ]
+        has:
+          field: declarator
+          stopBy: end
+          kind: function_declarator
+          all:
+            - has: { field: declarator, kind: identifier, pattern: $NAME }
+            - has: { field: declarator, kind: identifier, pattern: $CLASS }
+---
+# a constructor defined in the class body: a function whose name is the class's own
+id: cpp-constructor
+language: Cpp
+rule:
+  kind: function_definition
+  all:
+    - inside:
+        kind: field_declaration_list
+        inside:
+          any: [ { kind: class_specifier }, { kind: struct_specifier }, { kind: union_specifier } ]
+          has: { field: name, pattern: $CLASS }
+    - has:
+        field: declarator
+        stopBy: end
+        kind: function_declarator
+        all:
+          - has: { field: declarator, kind: identifier, pattern: $NAME }
+          - has: { field: declarator, kind: identifier, pattern: $CLASS }
+    - not: { inside: { kind: template_declaration } }
+---
+id: cpp-constructor.prototype
+language: Cpp
+rule:
+  kind: declaration
+  all:
+    - inside: { kind: field_declaration_list }
+    - has:
+        field: declarator
+        stopBy: end
+        kind: function_declarator
+        has: { field: declarator, kind: identifier, pattern: $NAME }
+    - not: { inside: { kind: template_declaration } }
+    - not: # defined out of line in the same file: Svc::Svc is the unit
+        inside:
+          kind: translation_unit
+          stopBy: end
+          has:
+            kind: function_definition
+            stopBy: end
+            has:
+              field: declarator
+              stopBy: end
+              kind: function_declarator
+              has: { field: declarator, kind: qualified_identifier, all: [ { has: { field: scope, pattern: $NAME } }, { has: { field: name, pattern: $NAME } } ] }
+---
+id: cpp-class
+language: Cpp
+rule:
+  kind: class_specifier
+  all:
+    - has: { field: name, pattern: $NAME }
+    - has: { field: body, kind: field_declaration_list }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+    - not: { inside: { kind: template_declaration } }
+---
+id: cpp-class.template
+language: Cpp
+rule:
+  kind: template_declaration
+  all:
+    - has:
+        kind: class_specifier
+        all:
+          - has: { field: name, pattern: $NAME }
+          - has: { field: body, kind: field_declaration_list }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+---
+id: cpp-struct
+language: Cpp
+rule:
+  kind: struct_specifier
+  all:
+    - has: { field: name, pattern: $NAME }
+    - has: { field: body, kind: field_declaration_list }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+    - not: { inside: { kind: template_declaration } }
+---
+id: cpp-struct.template
+language: Cpp
+rule:
+  kind: template_declaration
+  all:
+    - has:
+        kind: struct_specifier
+        all:
+          - has: { field: name, pattern: $NAME }
+          - has: { field: body, kind: field_declaration_list }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+---
+id: cpp-union
+language: Cpp
+rule:
+  kind: union_specifier
+  all:
+    - has: { field: name, pattern: $NAME }
+    - has: { field: body, kind: field_declaration_list }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+---
+id: cpp-enum
+language: Cpp
+rule:
+  kind: enum_specifier
+  all:
+    - has: { field: name, pattern: $NAME }
+    - has: { field: body, kind: enumerator_list }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+---
+# a namespace with a name: a container, so its functions and classes nest under it
+id: cpp-namespace
+language: Cpp
+rule:
+  kind: namespace_definition
+  has: { field: name, pattern: $NAME }
+---
+# `using Ptr = Svc*;` and typedefs
+id: cpp-type
+language: Cpp
+rule:
+  kind: alias_declaration
+  has: { field: name, pattern: $NAME }
+---
+id: cpp-type.typedef
+language: Cpp
+rule:
+  kind: type_definition
+  all:
+    - has: { field: declarator, stopBy: end, kind: type_identifier, pattern: $NAME }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+---
+# a data member of a class
+id: cpp-field
+language: Cpp
+rule:
+  kind: field_declaration
+  all:
+    - inside: { kind: field_declaration_list }
+    - has: { field: declarator, stopBy: end, kind: field_identifier, pattern: $NAME }
+    - not: { has: { field: declarator, stopBy: end, kind: function_declarator } }
+---
+# a file- or namespace-level variable, and an object-like macro
+id: cpp-const
+language: Cpp
+rule:
+  kind: declaration
+  all:
+    - has: { field: declarator, stopBy: end, kind: identifier, pattern: $NAME }
+    - not: { has: { field: declarator, stopBy: end, kind: function_declarator } }
+    - not: { has: { field: declarator, stopBy: end, kind: lambda_expression } }
+    - not: { inside: { kind: compound_statement, stopBy: end } }
+    - not: { inside: { kind: field_declaration_list, stopBy: end } }
+---
+id: cpp-const.macro
+language: Cpp
+rule:
+  kind: preproc_def
+  has: { field: name, pattern: $NAME }
+---
+id: cpp-function.macro
+language: Cpp
+rule:
+  kind: preproc_function_def
+  has: { field: name, pattern: $NAME }

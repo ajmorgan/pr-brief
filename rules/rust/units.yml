@@ -1,0 +1,84 @@
+# Rust units. Outer attributes (#[test], #[derive]) are siblings above the item; symbols.ts pulls
+# them into the unit the way it does comment lines. A function inside another's body is part of it.
+# An impl block (`impl Server`, `impl Runner for Server`) is a container named from its head line
+# (symbols.ts: "Server", "Runner for Server"), so its methods key as Server.start.
+id: rs-function
+language: Rust
+rule:
+  kind: function_item
+  all:
+    - has: { field: name, pattern: $NAME }
+    - not: { inside: { kind: block, stopBy: end } }
+    - not: { inside: { kind: declaration_list, inside: { any: [ { kind: impl_item }, { kind: trait_item } ] } } }
+---
+id: rs-method
+language: Rust
+rule:
+  any:
+    - kind: function_item
+    - kind: function_signature_item # a trait's required method
+  all:
+    - has: { field: name, pattern: $NAME }
+    - not: { inside: { kind: block, stopBy: end } }
+    - inside: { kind: declaration_list, inside: { any: [ { kind: impl_item }, { kind: trait_item } ] } }
+---
+id: rs-impl
+language: Rust
+rule:
+  kind: impl_item
+  not: { inside: { kind: block, stopBy: end } }
+---
+id: rs-trait
+language: Rust
+rule:
+  kind: trait_item
+  has: { field: name, pattern: $NAME }
+---
+id: rs-struct
+language: Rust
+rule:
+  kind: struct_item
+  has: { field: name, pattern: $NAME }
+---
+id: rs-enum
+language: Rust
+rule:
+  kind: enum_item
+  has: { field: name, pattern: $NAME }
+---
+id: rs-union
+language: Rust
+rule:
+  kind: union_item
+  has: { field: name, pattern: $NAME }
+---
+id: rs-type
+language: Rust
+rule:
+  kind: type_item
+  has: { field: name, pattern: $NAME }
+---
+# an inline module (`mod tests { … }`) is a container; `mod x;` has nothing to contain
+id: rs-module
+language: Rust
+rule:
+  kind: mod_item
+  all:
+    - has: { field: name, pattern: $NAME }
+    - has: { field: body, kind: declaration_list }
+---
+id: rs-const
+language: Rust
+rule:
+  any:
+    - kind: const_item
+    - kind: static_item
+  all:
+    - has: { field: name, pattern: $NAME }
+    - not: { inside: { kind: block, stopBy: end } }
+---
+id: rs-macro
+language: Rust
+rule:
+  kind: macro_definition
+  has: { field: name, pattern: $NAME }

@@ -1,0 +1,40 @@
+# Haskell units. A top-level function is several sibling nodes: its type signature and one `function`
+# (or `bind`) node per equation; all carry the same name, and symbols.ts merges adjacent same-named
+# siblings into one unit that runs from the signature to the last equation. Local definitions (let,
+# where) sit inside local_binds and belong to the enclosing function. An instance is a container
+# named from its head line ("Runner Color"), so its methods key as `Runner Color.run`.
+id: hs-function
+language: Haskell
+rule:
+  any:
+    - kind: function
+    - kind: bind
+    - kind: signature
+  all:
+    - has: { field: name, pattern: $NAME }
+    - not: { inside: { kind: local_binds, stopBy: end } }
+---
+id: hs-data
+language: Haskell
+rule:
+  any:
+    - kind: data_type
+    - kind: newtype
+  has: { field: name, pattern: $NAME }
+---
+id: hs-type
+language: Haskell
+rule:
+  kind: type_synomym
+  has: { field: name, pattern: $NAME }
+---
+id: hs-class
+language: Haskell
+rule:
+  kind: class
+  has: { field: name, pattern: $NAME }
+---
+id: hs-instance
+language: Haskell
+rule:
+  kind: instance
