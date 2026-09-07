@@ -8,7 +8,8 @@ function fuzzyScore(query, text) {
   if (!query) return 1;
   const q = query.toLowerCase();
   const t = text.toLowerCase();
-  if (t.includes(q)) return 100 - t.indexOf(q) + (t.startsWith(q) ? 50 : 0);
+  // a real substring match always outranks a fuzzy one, whatever the fuzzy streaks add up to
+  if (t.includes(q)) return 1000 - t.indexOf(q) + (t.startsWith(q) ? 500 : 0);
   let ti = 0; let score = 0; let streak = 0;
   for (const ch of q) {
     const idx = t.indexOf(ch, ti);

@@ -98,7 +98,7 @@ for (const [name, prefix] of [
   ['colorscheme', 'colo'], ['preview', 'pre'], ['split', 'sp'], ['zen', 'zen'], ['help', 'h'],
   ['saveas', 'sav'], ['files', 'files'], ['language', 'lang'], ['export', 'export'],
   // review-brief mode
-  ['unit', 'unit'], ['file', 'file'], ['note', 'note'], ['changed', 'ch'], ['reload', 'rel'],
+  ['unit', 'unit'], ['file', 'file'], ['note', 'note'], ['copy', 'copy'], ['changed', 'ch'], ['reload', 'rel'],
 ]) defineEx(name, prefix);
 
 // ]u / [u step through brief units; delivered as ex-command events like the rest.
