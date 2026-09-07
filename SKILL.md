@@ -61,7 +61,7 @@ not in the listed files.
 A slot looks like this:
 
 ```
-**Purpose:** <<rb:does src/x.ts#parse | ≤40 words, present tense: what this function does now>>
+**Function Context:** <<rb:does src/x.ts#parse | ≤40 words, present tense: what this function does now>>
 ```
 
 Everything between `<<` and `>>` is one slot: an id, a `|`, and the
@@ -76,7 +76,7 @@ Rules for every slot:
    Be concise and plain: declarative sentences, no preamble, no hedging, no
    filler, never restate the heading ("This function…"). Budgets are ceilings;
    most slots need one sentence.
-2. A unit's `Purpose:` / `Changes:` describe the code as it is in the hunk below
+2. A unit's `… Context:` / `Changes:` describe the code as it is in the hunk below
    the slot. If the intent and the code disagree, describe the code and say
    so in one clause.
 3. A unit's `Changes:` states the behavioural difference first. A trailing clause on
@@ -85,7 +85,7 @@ Rules for every slot:
    `Review Observations:` is optional: write only something concrete a
    reviewer should check (unreachable or redundant code, an unused leftover,
    a missing case, behaviour the description does not explain). If there is
-   nothing, delete that whole line. Never write "none". Keep `Purpose:` and
+   nothing, delete that whole line. Never write "none". Keep `… Context:` and
    `Changes:` purely descriptive; judgments go here.
 5. A `<!-- rb:revise … -->` block under a slot means the code changed since
    the previous brief. It contains the previous text, the commits since, and

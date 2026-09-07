@@ -692,7 +692,7 @@ async function pickBriefFile() {
   if (item) gotoBriefLine(item.id);
 }
 
-/** A unit as a PR comment: the reviewer's Notes up front, the brief's Purpose and Changes as folded
+/** A unit as a PR comment: the reviewer's Notes up front, the brief's Context and Changes as folded
  *  context (unfolded when there are no Notes), headed by the unit's location — a link to the lines on
  *  the repository's web UI when the briefed code is committed, plain text otherwise. */
 function unitAsComment(unit) {
@@ -706,7 +706,7 @@ function unitAsComment(unit) {
   if (loc && committed && briefMeta?.repo && head) where = `[${where}](${briefMeta.repo}/blob/${head}/${loc.path}#L${loc.start}-L${loc.end})`;
   const sig = unit.heading.replace(/ — .*$/, '').trim(); // `sig` — status · `path:lines` → `sig`
   const status = unit.status === 'other' ? '' : ` — ${unit.status}`;
-  const context = [slots.purpose && `**Purpose:** ${slots.purpose}`, slots.changes && `**Changes:** ${slots.changes}`].filter(Boolean).join('\n\n');
+  const context = [slots.purpose && `**${slots.contextLabel ?? 'Context'}:** ${slots.purpose}`, slots.changes && `**Changes:** ${slots.changes}`].filter(Boolean).join('\n\n');
   const head3 = `**${where}** ${sig}${status}`;
   const md = slots.notes
     ? `${head3}\n\n${slots.notes}\n\n<details><summary>Context from the review brief</summary>\n\n${context}\n\n</details>`

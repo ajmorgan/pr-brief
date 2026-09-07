@@ -73,7 +73,7 @@ cards near the viewport are laid out,
 so a brief with hundreds of units stays quick. `]u` / `[u` step through units, `:note`
 adds your note to the unit under the cursor, `:copy` (or the copy icon on a
 unit heading in the preview) copies the unit as a PR comment — your Notes,
-with the brief's Purpose and Changes folded under them, and a link to the
+with the brief's Context and Changes folded under them, and a link to the
 lines when the code is committed — `:changed` shows only units that
 changed since the last brief, `:w` writes back to the file, `:rel` reloads it. `node scripts/viewer.ts --stop` stops the server.
 Saving is refused if the file changed on disk since you opened it (the agent
@@ -86,7 +86,7 @@ in the editor at the line — read-only, at the version the brief describes
 (the commit in `commit` mode, otherwise the working tree). Browser back
 returns to the brief; middle-click opens the file in a new tab.
 
-Languages with unit rules: TypeScript, TSX, JavaScript, Java, Python, Kotlin (incl. `.kts` build scripts), Go, Lua, Bash, HTML (elements with an id, script, style), CSS (rule sets, @-rules), YAML (keys two levels deep, named list items), Markdown (sections). Any other file type is briefed as a whole file — its diff under the file's Purpose/Changes.
+Languages with unit rules: TypeScript, TSX, JavaScript, Java, Python, Kotlin (incl. `.kts` build scripts), Go, Lua, Bash, HTML (elements with an id, script, style), CSS (rule sets, @-rules), YAML (keys two levels deep, named list items), Markdown (sections). Any other file type is briefed as a whole file — its diff under the file's File Context/Changes.
 
 Adding a language: add `rules/<lang>/units.yml` (one rule per unit kind, ids
 prefixed `<lang>-`), list the directory in `sgconfig.yml`, and add the file

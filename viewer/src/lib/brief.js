@@ -1,7 +1,7 @@
 // Review-brief model. A brief is Markdown written by the review-brief skill:
 // front matter starting `review-brief: N`, `## file` sections, `### unit`
 // entries, each followed by an `<!-- rb:… -->` marker, then labelled slots
-// (`**Purpose:**`, `**Changes:**`, `**Notes:**`, …) and a ```diff hunk. This module reads that
+// (`**File Context:**` / `**<Kind> Context:**`, `**Changes:**`, `**Notes:**`, …) and a ```diff hunk. This module reads that
 // structure into line-addressed files and units; it never changes the text.
 
 const FENCE = /^(`{3,})/;
@@ -93,7 +93,8 @@ export function parseBrief(text) {
 /** Strip the link wrapper extract puts around paths: [`x`](x#L1) → `x`. */
 function unlink(text) { return text.replace(/\[(`[^`]*`)\]\([^)]*\)/g, '$1'); }
 
-/** A unit's prose slots as written in the brief: { purpose, changes, notes }, missing keys absent. */
+/** A unit's prose slots as written in the brief: { purpose, changes, notes }, missing keys absent;
+ *  contextLabel is the description's label as written ("Function Context", …; older briefs: "Purpose"). */
 export function unitSlots(text, unit) {
   const lines = text.split('\n').slice(unit.line - 1, unit.end);
   const out = {};
@@ -103,8 +104,9 @@ export function unitSlots(text, unit) {
     const fm = l.match(FENCE);
     if (fenceLen === 0 && fm) { fenceLen = fm[1].length; continue; }
     if (fenceLen > 0) { if (fm && fm[1].length >= fenceLen && l.trim() === fm[1]) fenceLen = 0; continue; }
-    const m = l.match(/^\*\*(Purpose|Changes|Notes):\*\*\s*(.*)$/);
+    const m = l.match(/^\*\*((?:[A-Z][A-Za-z]* )?Context|Purpose|Does|Did|Changes|Notes):\*\*\s*(.*)$/);
     if (!m) continue;
+    const key = m[1] === 'Changes' ? 'changes' : m[1] === 'Notes' ? 'notes' : 'purpose';
     const parts = [m[2]];
     for (let j = i + 1; j < lines.length; j++) {
       const n = lines[j];
@@ -112,7 +114,7 @@ export function unitSlots(text, unit) {
       parts.push(n);
     }
     const v = parts.join('\n').trim();
-    if (v && !v.startsWith('<<rb:')) out[m[1].toLowerCase()] = v;
+    if (v && !v.startsWith('<<rb:')) { out[key] = v; if (key === 'purpose') out.contextLabel = m[1]; }
   }
   return out;
 }

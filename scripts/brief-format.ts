@@ -23,15 +23,24 @@ export const BUDGETS: Record<string, number> = {
 export const SHORT_KINDS = new Set(["type", "interface", "enum", "field", "class", "record", "annotation", "object", "key", "item", "doc", "rule", "element", "script", "style", "block"]);
 export const CALLABLE_KINDS = new Set(["function", "method", "constructor", "arrow"]);
 
-// Unit slots are labelled Purpose: (does; did for a deleted unit) and Changes: (change).
-// A file's Purpose:/Changes: share the labels; the parser tells them apart by position.
-// The old Does:/Change:/Did: labels are still read so earlier briefs carry over.
-export const LABEL_OF: Record<string, string> = { overview: "Overview", purpose: "Purpose", changes: "Changes", does: "Purpose", did: "Purpose", change: "Changes", review: "Review Observations", notes: "Notes" };
-export const labelOf = (key: string): string => `**${LABEL_OF[key] ?? key[0].toUpperCase() + key.slice(1)}:**`;
+// Slot labels. A file's description is "File Context:"; a unit's is "<Kind> Context:" for its kind
+// (Function, Method, Class, Section, …), so the label itself tells the reader what they are looking at.
+// Both levels also have "Changes:"; the parser tells file from unit by position. The old
+// Purpose:/Does:/Did:/Change:/Delta: labels are still read so earlier briefs carry over.
+export const KIND_WORD: Record<string, string> = {
+  function: "Function", arrow: "Function", method: "Method", constructor: "Constructor",
+  class: "Class", interface: "Interface", enum: "Enum", record: "Record", annotation: "Annotation", object: "Object", type: "Type",
+  const: "Const", field: "Field",
+  section: "Section", key: "Key", item: "Item", doc: "Document", rule: "Rule", element: "Element", script: "Script", style: "Style", block: "Block",
+};
+export const kindWord = (kind?: string): string => (kind && KIND_WORD[kind]) ?? (kind ? kind[0].toUpperCase() + kind.slice(1) : "Unit");
+export const LABEL_OF: Record<string, string> = { overview: "Overview", purpose: "File Context", changes: "Changes", does: "Context", did: "Context", change: "Changes", review: "Review Observations", notes: "Notes" };
+export const labelOf = (key: string, kind?: string): string => `**${key === "does" || key === "did" ? `${kindWord(kind)} Context` : LABEL_OF[key] ?? key[0].toUpperCase() + key.slice(1)}:**`;
+const CONTEXT_LABEL = /^\*\*([A-Z][A-Za-z]*) Context:\*\*/;
 
 const SLOT_LABELS: Record<string, string> = {
   "**Overview:**": "overview",
-  "**Purpose:**": "purpose",
+  "**Purpose:**": "purpose", // pre-Context label, still read
   "**Changes:**": "changes",
   "**Delta:**": "change", // short-lived label, read for carry-over
   "**Does:**": "does",
@@ -40,6 +49,13 @@ const SLOT_LABELS: Record<string, string> = {
   "**Review Observations:**": "review",
   "**Notes:**": "notes",
 };
+
+/** The slot a line starts, with the label as written: fixed labels first, then any "<Word> Context:". */
+function slotLabel(l: string): { key: string; label: string } | null {
+  for (const [label, key] of Object.entries(SLOT_LABELS)) if (l.startsWith(label)) return { key, label };
+  const m = l.match(CONTEXT_LABEL);
+  return m ? { key: "purpose", label: m[0] } : null; // File Context: on a file, <Kind> Context: on a unit — position decides
+}
 
 export interface ParsedUnit {
   id: string;
@@ -191,15 +207,13 @@ export function parseBrief(text: string): ParsedBrief {
       pendingOther = null;
       continue;
     }
-    for (const [label, key] of Object.entries(SLOT_LABELS)) {
-      if (l.startsWith(label)) {
-        const { value, next } = readSlot(lines, i, label);
-        if (key === "overview") brief.overview = value;
-        else if (unit) unit.slots[key === "purpose" ? (unit.status === "deleted" ? "did" : "does") : key === "changes" ? "change" : key] = value;
-        else if (file) file.slots[key] = value;
-        i = next - 1;
-        break;
-      }
+    const slot = slotLabel(l);
+    if (slot) {
+      const { value, next } = readSlot(lines, i, slot.label);
+      if (slot.key === "overview") brief.overview = value;
+      else if (unit) unit.slots[slot.key === "purpose" ? (unit.status === "deleted" ? "did" : "does") : slot.key === "changes" ? "change" : slot.key] = value;
+      else if (file) file.slots[slot.key] = value;
+      i = next - 1;
     }
   }
   return brief;

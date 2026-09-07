@@ -40,14 +40,14 @@ previous:
 ## [`config/app.yaml`](config/app.yaml) — modified
 <!-- rb:file path="config/app.yaml" hash="038941a6d4f653f2" -->
 
-**Purpose:** Runtime configuration for the demo app: a `name` and a numeric `level`.
+**File Context:** Runtime configuration for the demo app: a `name` and a numeric `level`.
 
 **Changes:** Raises `level` from 1 to 2 in the `demo` document; the only change, matching the new optional `level` on `Config` in `src/util/parse.ts`.
 
 ### `name: demo` — modified doc · [`config/app.yaml:1-3`](config/app.yaml#L1) · changed since last
 <!-- rb:unit id="config/app.yaml#demo" kind="doc" status="modified" hash="038941a6d4f653f2" -->
 
-**Purpose:** The one YAML document: `name: demo` and its `level`.
+**Document Context:** The one YAML document: `name: demo` and its `level`.
 
 **Changes:** `level: 1` → `level: 2`.
 
@@ -62,7 +62,7 @@ previous:
 ## [`src/orders/OrderService.java`](src/orders/OrderService.java) — modified
 <!-- rb:file path="src/orders/OrderService.java" hash="cca5f755dd85d2ce" -->
 
-**Purpose:** Persists and retrieves orders through a `Repo`. It is the single write path for orders.
+**File Context:** Persists and retrieves orders through a `Repo`. It is the single write path for orders.
 
 **Changes:** Adds validation before persisting and removes the unvalidated path. `save` now calls a new private `validate` and returns a boolean; `legacySave` is deleted. The `OrderService` constructor also initialises a new `clock` field, which nothing reads yet.
 
@@ -86,7 +86,7 @@ previous:
 ### `Clock clock` — new field · [`src/orders/OrderService.java:8-8`](src/orders/OrderService.java#L8)
 <!-- rb:unit id="src/orders/OrderService.java#OrderService.clock" kind="field" status="new" hash="302e9d5c6a79ca88" -->
 
-**Purpose:** Holds a `Clock`, set to system UTC in the constructor; no method reads it yet.
+**Field Context:** Holds a `Clock`, set to system UTC in the constructor; no method reads it yet.
 
 ```diff
 +    private final Clock clock;
@@ -97,7 +97,7 @@ previous:
 
 **Callers (by name):** none found
 
-**Purpose:** Stores the given `Repo` and initialises `clock` to `Clock.systemUTC()`.
+**Constructor Context:** Stores the given `Repo` and initialises `clock` to `Clock.systemUTC()`.
 
 **Changes:** Additionally assigns `this.clock = Clock.systemUTC()`. Nothing else changed.
 
@@ -115,7 +115,7 @@ previous:
 
 **Callers (by name):** none found
 
-**Purpose:** Validates the order, writes it to the repo under its id, and returns `true`.
+**Method Context:** Validates the order, writes it to the repo under its id, and returns `true`.
 
 **Changes:** Signature changed from `public void save(Order o)` to `public boolean save(Order o)`. Now calls `validate(o)` before `repo.put` and returns the constant `true`; previously it only did the put. Meant to reject orders with a null id before they reach storage.
 
@@ -133,7 +133,7 @@ previous:
 
 **Callers (by name):** none found
 
-**Purpose:** Wrote an order through `repo.putLegacy` with no validation. No direct replacement; `save` is the remaining write path.
+**Method Context:** Wrote an order through `repo.putLegacy` with no validation. No direct replacement; `save` is the remaining write path.
 
 ```diff
 -    public void legacySave(Order o) {
@@ -144,7 +144,7 @@ previous:
 ### `void validate(Order o)` — new · [`src/orders/OrderService.java:25-27`](src/orders/OrderService.java#L25)
 <!-- rb:unit id="src/orders/OrderService.java#OrderService.validate" kind="method" status="new" hash="282077289500bc75" -->
 
-**Purpose:** Throws `NullPointerException` with message `"id"` when the order's id is null; otherwise returns normally.
+**Method Context:** Throws `NullPointerException` with message `"id"` when the order's id is null; otherwise returns normally.
 
 ```diff
 +    private void validate(Order o) {
@@ -157,14 +157,14 @@ previous:
 ## [`src/util/callers.ts`](src/util/callers.ts) — modified
 <!-- rb:file path="src/util/callers.ts" hash="a4828e29286d24e5" -->
 
-**Purpose:** Entry points that drive the config loader: `boot` warms it and `shutdown` clears it.
+**File Context:** Entry points that drive the config loader: `boot` warms it and `shutdown` clears it.
 
 **Changes:** Adds a `shutdown` function so a loader cache can be cleared at exit. Note it clears a newly constructed `Loader`, not the instance `boot` created.
 
 ### `shutdown()` — new · [`src/util/callers.ts:9-11`](src/util/callers.ts#L9)
 <!-- rb:unit id="src/util/callers.ts#shutdown" kind="function" status="new" hash="f29ff52441265a4b" -->
 
-**Purpose:** Constructs a new `Loader` and calls `clear()` on it. Because the instance is fresh, its cache is already empty; the loader used by `boot` is untouched.
+**Function Context:** Constructs a new `Loader` and calls `clear()` on it. Because the instance is fresh, its cache is already empty; the loader used by `boot` is untouched.
 
 ```diff
 +export function shutdown(): void {
@@ -177,12 +177,12 @@ previous:
 ## [`src/util/extra.ts`](src/util/extra.ts) — added
 <!-- rb:file path="src/util/extra.ts" hash="2a0472552d30dbbd" -->
 
-**Purpose:** New module exporting one boolean helper; no callers yet.
+**File Context:** New module exporting one boolean helper; no callers yet.
 
 ### `extra()` — new · [`src/util/extra.ts:1-3`](src/util/extra.ts#L1)
 <!-- rb:unit id="src/util/extra.ts#extra" kind="function" status="new" hash="8e8d3825cb8715d8" -->
 
-**Purpose:** Returns `true`.
+**Function Context:** Returns `true`.
 
 ```diff
 +export function extra(): boolean {
@@ -195,12 +195,12 @@ previous:
 ## [`src/util/fresh.ts`](src/util/fresh.ts) — added
 <!-- rb:file path="src/util/fresh.ts" hash="b771b16d98ce8e54" -->
 
-**Purpose:** New module exporting one string helper; no callers yet.
+**File Context:** New module exporting one string helper; no callers yet.
 
 ### `fresh()` — new · [`src/util/fresh.ts:1-3`](src/util/fresh.ts#L1)
 <!-- rb:unit id="src/util/fresh.ts#fresh" kind="function" status="new" hash="fc55ea4a2577fe81" -->
 
-**Purpose:** Returns the string `"new"`.
+**Function Context:** Returns the string `"new"`.
 
 ```diff
 +export function fresh(): string {
@@ -213,7 +213,7 @@ previous:
 ## `src/util/old.ts` — deleted
 <!-- rb:file path="src/util/old.ts" hash="48ad7623fc738ddc" -->
 
-**Purpose:** Held the obsolete `gone` helper. The file was deleted.
+**File Context:** Held the obsolete `gone` helper. The file was deleted.
 
 **Changes:** Removes the module and its only export, `gone`. No callers existed.
 
@@ -222,7 +222,7 @@ previous:
 
 **Callers (by name):** none found
 
-**Purpose:** Returned the constant `1`. No replacement.
+**Function Context:** Returned the constant `1`. No replacement.
 
 ```diff
 -export function gone(): number {
@@ -235,7 +235,7 @@ previous:
 ## [`src/util/parse.ts`](src/util/parse.ts) — modified
 <!-- rb:file path="src/util/parse.ts" hash="140444b3c2092f79" -->
 
-**Purpose:** Reads and normalises the app config file, caches parsed configs per path via `Loader`, and defines the `Config` shape.
+**File Context:** Reads and normalises the app config file, caches parsed configs per path via `Loader`, and defines the `Config` shape.
 
 **Changes:** Hardens loading and exposes more of the loader. `parseConfig` fails fast with a clear error when the file is missing; `normalize` lower-cases the name; `Loader` gains a `size` method; `Config` gains an optional `level`; a new `configPath` returns the default path; `DEFAULT_PATH` is renamed to `app.yml`, and the `fs` import gains `existsSync`.
 
@@ -257,7 +257,7 @@ previous:
 ### `DEFAULT_PATH` — modified const · [`src/util/parse.ts:3-3`](src/util/parse.ts#L3) · changed since last
 <!-- rb:unit id="src/util/parse.ts#DEFAULT_PATH" kind="const" status="modified" hash="746fb8cc3ce0048b" -->
 
-**Purpose:** The default config location, `config/app.yml`.
+**Const Context:** The default config location, `config/app.yml`.
 
 **Changes:** Value changed from `config/app.yaml` to `config/app.yml`; the file in the repo is still `app.yaml`.
 
@@ -271,7 +271,7 @@ previous:
 
 **Callers (by name):** [`src/util/callers.ts:6`](src/util/callers.ts#L6), [`src/util/parse.ts:21`](src/util/parse.ts#L21) (2)
 
-**Purpose:** Reads the file at `path` and JSON-parses it into a `Config`. Called by `Loader.load` and directly by `boot`.
+**Function Context:** Reads the file at `path` and JSON-parses it into a `Config`. Called by `Loader.load` and directly by `boot`.
 
 **Changes:** Now throws `Error("config not found: <path>")` when the file does not exist, before reading. Previously `readFileSync` would throw its own ENOENT error.
 
@@ -288,7 +288,7 @@ previous:
 
 **Callers (by name):** [`src/util/parse.ts:21`](src/util/parse.ts#L21) (1)
 
-**Purpose:** Returns a copy of the config with `name` trimmed and lower-cased. Used by `Loader.load`.
+**Function Context:** Returns a copy of the config with `name` trimmed and lower-cased. Used by `Loader.load`.
 
 **Changes:** Appends `.toLowerCase()` after `.trim()`, so names are now case-folded as well as trimmed.
 
@@ -302,7 +302,7 @@ previous:
 ### `size(): number` — new · [`src/util/parse.ts:26-28`](src/util/parse.ts#L26)
 <!-- rb:unit id="src/util/parse.ts#Loader.size" kind="method" status="new" hash="6532bc77953bea51" -->
 
-**Purpose:** Returns the number of entries in the cache.
+**Method Context:** Returns the number of entries in the cache.
 
 ```diff
 +  size(): number {
@@ -315,7 +315,7 @@ previous:
 
 **References (by name):** none found
 
-**Purpose:** Shape of a parsed config: required `name`, optional numeric `level`.
+**Interface Context:** Shape of a parsed config: required `name`, optional numeric `level`.
 
 **Changes:** Adds an optional `level?: number` field.
 
@@ -329,7 +329,7 @@ previous:
 ### `configPath()` — new · [`src/util/parse.ts:40-42`](src/util/parse.ts#L40)
 <!-- rb:unit id="src/util/parse.ts#configPath" kind="function" status="new" hash="f96f603d3518a269" -->
 
-**Purpose:** Returns `DEFAULT_PATH`.
+**Function Context:** Returns `DEFAULT_PATH`.
 
 ```diff
 +export function configPath(): string {

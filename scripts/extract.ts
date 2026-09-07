@@ -660,7 +660,10 @@ function main(): void {
   // rewrites history (the old base is no ancestor of the new one) and an unrelated commit moves
   // the base without touching the brief's files: both are still the same change set. A commit
   // that touches those files means the reviewed work landed, and the next brief starts clean.
-  const primary = sources[0] ?? null;
+  // the reference is the first source the reviewer could actually have read: a skeleton regenerated
+  // before it was filled (every slot still a token) is not a previous brief, only a previous skeleton
+  const filledBrief = (p: ParsedBrief) => (p.overview && !isToken(p.overview)) || p.files.some((pf) => [...Object.values(pf.slots), ...pf.units.flatMap((pu) => Object.values(pu.slots))].some((v) => typeof v === "string" && v && !isToken(v)));
+  const primary = sources.find(filledBrief) ?? null;
   const committedSince = (p: ParsedBrief): boolean => {
     const pb = typeof p.front.base === "string" ? p.front.base : null;
     if (!pb || pb === R.base) return false;
@@ -715,14 +718,18 @@ function main(): void {
         }
       }
       if (!prev) continue;
-      // one badge, one meaning: this unit is not what the previous brief showed (absent then, or a different body)
-      if (!pu || !prevUnits.has(u.id)) { u.badge = "changed since last"; counts.changed++; anyChanged = true; continue; }
-      if (pu.hash === u.hash) counts.unchanged++;
+      // one badge, one meaning: this unit is not what the previous brief showed (absent then, or a different
+      // body). Compared against the previous brief's own unit — not the prose pick, which may come from an
+      // older brief or the cache when the previous brief's slot was still a token.
+      const prevU = prevUnits.get(u.id);
+      if (!prevU) { u.badge = "changed since last"; counts.changed++; anyChanged = true; continue; }
+      if (prevU.hash === u.hash) counts.unchanged++;
       else {
         counts.changed++; anyChanged = true; u.badge = "changed since last";
+        const prevText = (k: string): string | undefined => [prevU, pu].map((x) => x?.slots?.[k]).find((v) => typeof v === "string" && v && !isToken(v));
         const since = (sinceDiff.get(f.path) ?? []).filter((h) => h.plusLines.some((l) => u.newLines.has(l) || (u.newSpan && l >= u.newSpan[0] && l <= u.newSpan[1])) || h.minusLines.some((l) => u.oldLines.has(l)));
         u.revise = [
-          ...["does", "change", "did", "other", "review"].filter((k) => pu.slots[k] && !isToken(pu.slots[k])).map((k) => `previous ${labelOf(k).slice(2,-3)}: ${pu.slots[k]}`),
+          ...["does", "change", "did", "other", "review"].filter((k) => prevText(k)).map((k) => `previous ${labelOf(k, u.kind).slice(2,-3)}: ${prevText(k)}`),
           `commits touching this file since last brief: ${f.commitsSinceLast.length ? f.commitsSinceLast.join("; ") : "none (uncommitted changes)"}`,
           "since-last hunk:",
           ...(since.length ? since.map((h) => [h.header, ...h.body].join("\n")) : ["(not available)"]),
@@ -735,7 +742,7 @@ function main(): void {
     if (pf) {
       const p = lock(pf.slots.purpose);
       if (p && pf.hash === f.hash) f.slots.purpose = p;
-      else if (p) f.purposeRevise = `previous Purpose: ${p.text}`; // the file changed: confirm or revise, do not start from scratch
+      else if (p) f.purposeRevise = `previous File Context: ${p.text}`; // the file changed: confirm or revise, do not start from scratch
       if (pf.slots.notes) f.notes = pf.slots.notes;
     }
     // the same commit briefed before, with no brief of it on disk: its file prose comes back from the cache
@@ -816,7 +823,7 @@ function main(): void {
     if (f.binary) { L.push(`Binary file; ${statusWord}. No units.`, ""); continue; }
     // Changes: must name every unit except tests (their titles are long and they are listed just below) and buckets
     const unitNames = f.units.filter((u) => u.kind !== "other" && u.kind !== "file" && u.kind !== "test").map((u) => u.name);
-    L.push(`**Purpose:** ${f.slots.purpose?.text ?? `<<rb:purpose ${f.path} | 1–2 sentences: what this file is responsible for, as it now stands${f.status === "D" ? " (past tense: it was deleted)" : f.status === "A" ? " — the file is new; say what it is for and who is expected to use it" : ""}>>`}`, "");
+    L.push(`${labelOf("purpose")} ${f.slots.purpose?.text ?? `<<rb:purpose ${f.path} | 1–2 sentences: what this file is responsible for, as it now stands${f.status === "D" ? " (past tense: it was deleted)" : f.status === "A" ? " — the file is new; say what it is for and who is expected to use it" : ""}>>`}`, "");
     // an added file has no "before": Purpose only (its units are all new and get Purpose: only)
     if (f.status !== "A") L.push(`**Changes:** ${f.slots.changes?.text ?? `<<rb:changes ${f.path} | 2–5 sentences or bullets: what the changes in this file are meant to accomplish. Must name every unit below${unitNames.length ? ": " + unitNames.join(", ") : ""}>>`}`, "");
     if (f.slots.review?.text !== "") { const slot = f.slots.review?.text, id = f.path; L.push(`**Review Observations:** ${slot ?? `<<rb:review ${id} | optional, ≤60 words: what a careful reader should check — unreachable or redundant code, unused leftovers, a missing case, behaviour the text above does not explain. Concrete and checkable only. Delete this whole line if there is nothing to say.>>`}`, ""); }
@@ -857,9 +864,9 @@ function main(): void {
       const short = SHORT_KINDS.has(u.kind);
       const doesBudget = short ? BUDGETS.short : BUDGETS.does;
       if (u.status === "deleted") {
-        L.push(`${labelOf("did")} ${u.slots.did?.text ?? `<<rb:did ${u.id} | ≤${BUDGETS.did} words, past tense: what this ${u.kind} used to do; if you can see what replaced it, name the replacement>>`}`, "");
+        L.push(`${labelOf("did", u.kind)} ${u.slots.did?.text ?? `<<rb:did ${u.id} | ≤${BUDGETS.did} words, past tense: what this ${u.kind} used to do; if you can see what replaced it, name the replacement>>`}`, "");
       } else {
-        L.push(`${labelOf("does")} ${u.slots.does?.text ?? `<<rb:does ${u.id} | ≤${doesBudget} words, present tense: what this ${u.kind} does now${u.callers ? "; may cite the callers line above" : ""}>>`}`, "");
+        L.push(`${labelOf("does", u.kind)} ${u.slots.does?.text ?? `<<rb:does ${u.id} | ≤${doesBudget} words, present tense: what this ${u.kind} does now${u.callers ? "; may cite the callers line above" : ""}>>`}`, "");
         if (u.status === "modified") {
           const sigNote = u.renamedFrom ? ` Renamed from \`${u.renamedFrom}\` — say so, then describe any other difference.` : u.oldSignature !== null && u.oldSignature !== u.signature ? ` The signature changed — name it: was \`${u.oldSignature}\`.` : "";
           const ws = u.tags.includes("whitespace-only") ? ' If the change is formatting only, write exactly: "formatting only".' : "";

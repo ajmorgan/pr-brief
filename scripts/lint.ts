@@ -98,7 +98,7 @@ function main(): void {
       : [["does", SHORT_KINDS.has(s.kind) ? BUDGETS.short : BUDGETS.does], ["change", BUDGETS.change]];
     for (const [key, budget] of want) {
       const v = u.slots[key];
-      const label = key === "other" ? `- … ${s.id}` : `${labelOf(key === "does" && s.status === "deleted" ? "did" : key)} ${s.id}`;
+      const label = key === "other" ? `- … ${s.id}` : `${labelOf(key === "does" && s.status === "deleted" ? "did" : key, s.kind)} ${s.id}`;
       if (v === undefined || v === "") { P("EMPTY", label, key === "other" ? "text after the ` — ` is missing — write it" : "label line is missing — restore it and write the text"); continue; }
       if (isToken(v)) continue;
       if (s.slots[key]?.locked && v !== s.slots[key].text) P("LOCKED", label, "carried-over text was changed — restore the previous text");
