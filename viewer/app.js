@@ -298,7 +298,7 @@ async function save() {
       }
       const content = els.editor.getValue();
       if (active.remote) {
-        active.mtime = await files.putRemote(active.remote, content);
+        active.mtime = await files.putRemote(active.remote, content, active.mtime);
       } else {
         const ok = await files.writeToHandle(active.handle, content);
         if (!ok) { els.toast.show('Permission to write the file was denied', { kind: 'error' }); return; }

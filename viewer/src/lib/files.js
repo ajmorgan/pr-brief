@@ -92,8 +92,11 @@ export async function remoteMtime(url) {
   return (await res.json()).mtime;
 }
 
-export async function putRemote(url, content) {
-  const res = await fetch(url, { method: 'PUT', body: content, headers: { 'Content-Type': 'text/markdown; charset=utf-8' } });
+export async function putRemote(url, content, mtime = null) {
+  // X-Brief-Mtime: the version this tab read; the server refuses (412) to overwrite a newer file
+  const headers = { 'Content-Type': 'text/markdown; charset=utf-8' };
+  if (typeof mtime === 'number') headers['X-Brief-Mtime'] = String(mtime);
+  const res = await fetch(url, { method: 'PUT', body: content, headers });
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()).mtime;
 }

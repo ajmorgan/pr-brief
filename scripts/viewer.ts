@@ -26,8 +26,8 @@
 // and writes back through PUT. The file on disk stays the source of truth.
 
 import { createServer } from "node:http";
-import { readFile, writeFile, stat } from "node:fs/promises";
-import { spawn, spawnSync, execFileSync } from "node:child_process";
+import { readFile, writeFile, stat, rename } from "node:fs/promises";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
@@ -37,16 +37,24 @@ const SKILL_DIR = path.resolve(path.dirname(new URL(import.meta.url).pathname), 
 const VIEWER = path.join(SKILL_DIR, "viewer");
 
 const args = process.argv.slice(2);
-const opt = (name: string, dflt: string | null = null): string | null => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : dflt; };
-let root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim(); // follows the brief on /switch
-let briefPath = path.resolve(root, opt("--out", "REVIEW_BRIEF.md")!);
+const opt = (name: string, dflt: string | null = null): string | null => { const i = args.indexOf(name); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : dflt; };
 const port = Number(opt("--port", "8790")); // fixed by default: the browser keeps settings and documents per origin
 const noOpen = args.includes("--no-open");
 const verbose = args.includes("--verbose"); // log every request
 const stop = args.includes("--stop"); // tell the running viewer to exit
+if (stop) {
+  // stopping a server has nothing to do with the current directory: no git, no brief
+  const r = await fetch(`http://127.0.0.1:${port}/stop`, { method: "POST" }).catch(() => null);
+  process.stdout.write(r?.ok ? `review-brief viewer on port ${port} stopped\n` : `no review-brief viewer on port ${port}\n`);
+  process.exit(0);
+}
+const rootProbe = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
+if (rootProbe.status !== 0) { process.stderr.write("viewer.ts: not inside a git repository\n"); process.exit(1); }
+let root = rootProbe.stdout.trim(); // follows the brief on /switch
+let briefPath = path.resolve(root, opt("--out", "REVIEW_BRIEF.md")!);
 
 if (!fs.existsSync(path.join(VIEWER, "index.html"))) { process.stderr.write(`viewer not found at ${VIEWER}\n`); process.exit(1); }
-if (!stop && !fs.existsSync(briefPath)) { process.stderr.write(`${briefPath} not found — run extract first\n`); process.exit(1); }
+if (!fs.existsSync(briefPath)) { process.stderr.write(`${briefPath} not found — run extract first\n`); process.exit(1); }
 
 const types: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
@@ -60,10 +68,16 @@ const types: Record<string, string> = {
 function repoWeb(dir: string): string | null {
   const r = spawnSync("git", ["remote", "get-url", "origin"], { cwd: dir, encoding: "utf8" });
   if (r.status !== 0) return null;
-  const u = r.stdout.trim().replace(/\.git$/, "");
-  const ssh = u.match(/^(?:ssh:\/\/)?git@([^:/]+)[:/](.+)$/);
-  if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
-  return /^https?:\/\//.test(u) ? u : null;
+  let u = r.stdout.trim().replace(/\.git$/, "");
+  // git@host:owner/repo and ssh://git@host[:port]/owner/repo → https://host/owner/repo
+  const ssh = u.match(/^(?:ssh:\/\/)?git@([^:/@]+)(?::\d+)?[:/](.+)$/);
+  if (ssh) u = `https://${ssh[1]}/${ssh[2].replace(/^\/+/, "")}`;
+  try {
+    const url = new URL(u);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    url.username = ""; url.password = ""; // a PAT in the remote must never reach a tab or a PR comment
+    return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  } catch { return null; }
 }
 let repo = repoWeb(root);
 
@@ -92,10 +106,18 @@ function broadcastMeta(): void {
   }, 80); // a rewrite is several fs events; one frame per change
 }
 let briefWatcher: fs.FSWatcher | null = null;
+let polled: string | null = null; // the path fs.watchFile polls when fs.watch is unavailable (inotify limits, odd mounts)
 function watchBrief(): void {
   briefWatcher?.close();
+  if (polled) { fs.unwatchFile(polled); polled = null; }
   const dir = path.dirname(briefPath), name = path.basename(briefPath);
-  try { briefWatcher = fs.watch(dir, (_event, file) => { if (!file || file === name) broadcastMeta(); }); } catch { briefWatcher = null; }
+  try { briefWatcher = fs.watch(dir, (_event, file) => { if (!file || file === name) broadcastMeta(); }); }
+  catch (e: any) {
+    briefWatcher = null;
+    process.stderr.write(`cannot watch ${dir} (${e?.code ?? e}); polling the brief every 2 s instead\n`);
+    polled = briefPath;
+    fs.watchFile(briefPath, { interval: 2000 }, () => broadcastMeta());
+  }
 }
 function startWatchers(): void {
   watchBrief();
@@ -124,8 +146,18 @@ function symbolsOf(rel: string, content: string): object[] {
   finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
+const OK_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+  // parsed against a fixed base: only the path and query are used, and a bad Host must not throw
+  let url: URL;
+  try { url = new URL(req.url ?? "/", "http://127.0.0.1"); } catch { res.writeHead(400); return res.end("bad request"); }
+  // The untrusted party on a developer machine is the browser, and everything it sends comes from
+  // 127.0.0.1. A Host that is not ours is a DNS-rebinding page; a POST or PUT with a foreign Origin is
+  // a cross-site request. The CLI's own fetch sends no Origin.
+  const host = req.headers.host ?? "";
+  if (!OK_HOST.test(host)) { res.writeHead(421, { "Content-Type": types[".txt"] }); return res.end("misdirected request: this server answers to localhost only"); }
+  const origin = req.headers.origin;
+  if ((req.method === "POST" || req.method === "PUT") && typeof origin === "string" && origin !== `http://${host}`) { res.writeHead(403, { "Content-Type": types[".txt"] }); return res.end("cross-origin request refused"); }
   if (verbose) res.on("finish", () => process.stdout.write(`${new Date().toISOString().slice(11, 19)} ${req.method} ${url.pathname}${url.search.slice(0, 120)} → ${res.statusCode}\n`));
   try {
     if (url.pathname === "/brief" && req.method === "GET") {
@@ -134,9 +166,8 @@ const server = createServer(async (req, res) => {
       return res.end(body);
     }
     if (url.pathname === "/brief/meta" && req.method === "GET") {
-      const s = await stat(briefPath);
       res.writeHead(200, { "Content-Type": types[".json"], "Cache-Control": "no-store" });
-      return res.end(JSON.stringify({ path: briefPath, name: path.basename(briefPath), mtime: s.mtimeMs, viewer: viewerBuild(), repo }));
+      return res.end(await metaJSON()); // mtime null while the file is missing: the server is still here
     }
     if (url.pathname === "/events" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive" });
@@ -149,7 +180,10 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/file" && req.method === "GET") {
       const rel = url.searchParams.get("path") ?? "";
       const abs = path.resolve(root, rel);
-      if (!rel || path.isAbsolute(rel) || rel.startsWith("-") || rel.split(/[\\/]/).includes("..") || !(abs + path.sep).startsWith(root + path.sep)) { res.writeHead(422, { "Content-Type": types[".txt"] }); return res.end("path must be relative to the repository"); }
+      // containment on the real paths: a symlink inside the repository must not lead outside it
+      let real = abs; try { real = fs.realpathSync(abs); } catch { /* not in the working tree: git show decides */ }
+      const rootReal = fs.realpathSync(root);
+      if (!rel || path.isAbsolute(rel) || rel.startsWith("-") || rel.split(/[\\/]/).includes("..") || !(abs + path.sep).startsWith(root + path.sep) || !(real + path.sep).startsWith(rootReal + path.sep)) { res.writeHead(422, { "Content-Type": types[".txt"] }); return res.end("path must be relative to the repository"); }
       const front = (await readFile(briefPath, "utf8")).split("\n---\n")[0];
       const fm = (k: string) => front.match(new RegExp(`^${k}: (.+)$`, "m"))?.[1] ?? null;
       const mode = fm("mode"), head = fm("head"), base = fm("base");
@@ -175,11 +209,13 @@ const server = createServer(async (req, res) => {
       for await (const c of req) chunks.push(c as Buffer);
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       const next = body.path;
-      if (typeof next !== "string" || !path.isAbsolute(next) || !fs.existsSync(next)) { res.writeHead(422); return res.end("path must be an existing absolute file"); }
+      if (typeof next !== "string" || !path.isAbsolute(next) || !fs.existsSync(next) || !fs.statSync(next).isFile()) { res.writeHead(422); return res.end("path must be an existing absolute file"); }
+      // only a brief can be served: the same front-matter gate PUT applies
+      if (!/^---\nreview-brief: \d+\n/.test(fs.readFileSync(next, "utf8").slice(0, 64))) { res.writeHead(422); return res.end("refused: not a review brief"); }
       briefPath = next;
       // the brief's repository is where /file reads from: take it from the caller, else from the brief's directory
       const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: path.dirname(next), encoding: "utf8" });
-      root = typeof body.root === "string" && fs.existsSync(body.root) ? body.root : r.status === 0 ? r.stdout.trim() : root;
+      root = typeof body.root === "string" && fs.existsSync(body.root) && fs.statSync(body.root).isDirectory() ? body.root : r.status === 0 ? r.stdout.trim() : root;
       repo = repoWeb(root);
       process.stdout.write(`now serving ${briefPath} (repo ${root})\n`);
       watchBrief();
@@ -195,7 +231,16 @@ const server = createServer(async (req, res) => {
         res.writeHead(422, { "Content-Type": types[".txt"] });
         return res.end("refused: body does not start with review-brief front matter");
       }
-      await writeFile(briefPath, body);
+      // the client says which version it read (X-Brief-Mtime); a file that moved on since is not overwritten
+      const expect = Number(req.headers["x-brief-mtime"]);
+      if (Number.isFinite(expect)) {
+        const cur = await stat(briefPath).catch(() => null);
+        if (cur && Math.abs(cur.mtimeMs - expect) > 1) { res.writeHead(412, { "Content-Type": types[".txt"] }); return res.end("the brief changed on disk since you read it — reload (:rel) and save again"); }
+      }
+      // write beside, then rename over: a reader never sees a truncated brief
+      const tmpPath = `${briefPath}.${process.pid}.tmp`;
+      await writeFile(tmpPath, body);
+      await rename(tmpPath, briefPath);
       const s = await stat(briefPath);
       res.writeHead(200, { "Content-Type": types[".json"] });
       return res.end(JSON.stringify({ ok: true, mtime: s.mtimeMs }));
@@ -215,15 +260,10 @@ const server = createServer(async (req, res) => {
 // If a review-brief viewer is already running on the port, hand it this brief and
 // exit: the open tab follows the switch by itself. Otherwise start serving.
 async function main() {
-  if (stop) {
-    const r = await fetch(`http://127.0.0.1:${port}/stop`, { method: "POST" }).catch(() => null);
-    process.stdout.write(r?.ok ? `review-brief viewer on port ${port} stopped\n` : `no review-brief viewer on port ${port}\n`);
-    return;
-  }
   if (port !== 0) {
     try {
       const meta = await fetch(`http://127.0.0.1:${port}/brief/meta`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      if (meta && typeof meta.mtime === "number") {
+      if (meta && typeof meta.path === "string" && "viewer" in meta) { // a review-brief viewer, whatever state its brief is in
         const r = await fetch(`http://127.0.0.1:${port}/switch`, { method: "POST", body: JSON.stringify({ path: briefPath, root }) });
         if (r.ok) { process.stdout.write(`review-brief viewer already running: http://127.0.0.1:${port}/?brief=/brief now shows ${path.relative(root, briefPath)} (the open tab updates itself)\n`); return; }
       }
