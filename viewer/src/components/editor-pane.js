@@ -209,16 +209,13 @@ export function languageForName(name) {
   return LanguageDescription.matchFilename(languages, name) ?? plainText;
 }
 
-export function languageByName(name) {
-  return LanguageDescription.matchLanguageName(languages, name, true) ?? plainText;
-}
-
 export class EditorPane extends HTMLElement {
   #view;
   #states = new Map();
   #docId = null;
   #language = plainText;
   #settings = {};
+  #dark = document.documentElement.style.colorScheme !== 'light';
   #compartments = {
     language: new Compartment(), vim: new Compartment(), theme: new Compartment(),
     wrap: new Compartment(), gutter: new Compartment(), tab: new Compartment(), brief: new Compartment(), readOnly: new Compartment(),
@@ -244,16 +241,34 @@ export class EditorPane extends HTMLElement {
   get language() { return this.#language; }
   get languageName() { return this.#language.name; }
 
+  // The settings-driven extensions, as one value per compartment. A fresh state is built from them; a
+  // cached state made under other settings is reconfigured with them.
+  #settingsExtensions(s = this.#settings) {
+    return {
+      vim: s.vim === false ? [] : vim(),
+      theme: this.#dark ? darkTheme : lightTheme,
+      gutter: s.lineNumbers === false ? [] : [lineNumbers(), highlightActiveLineGutter(), foldGutter()],
+      wrap: s.lineWrap === false ? [] : EditorView.lineWrapping,
+      tab: [indentUnit.of(' '.repeat(s.tabSize ?? 2)), EditorState.tabSize.of(s.tabSize ?? 2)],
+    };
+  }
+
+  /** What the settings-driven compartments hold: a cached state whose key differs is reconfigured on restore. */
+  #settingsKey(s = this.#settings) {
+    return [s.vim !== false, s.lineNumbers !== false, s.lineWrap !== false, s.tabSize ?? 2, this.#dark].join('|');
+  }
+
   #buildState(content, language, existingSettings = this.#settings) {
     const c = this.#compartments;
+    const x = this.#settingsExtensions(existingSettings);
     return EditorState.create({
       doc: content,
       extensions: [
-        c.vim.of(existingSettings.vim === false ? [] : vim()),
-        c.theme.of(document.documentElement.style.colorScheme === 'light' ? lightTheme : darkTheme),
-        c.gutter.of(existingSettings.lineNumbers === false ? [] : [lineNumbers(), highlightActiveLineGutter(), foldGutter()]),
-        c.wrap.of(existingSettings.lineWrap === false ? [] : EditorView.lineWrapping),
-        c.tab.of([indentUnit.of(' '.repeat(existingSettings.tabSize ?? 2)), EditorState.tabSize.of(existingSettings.tabSize ?? 2)]),
+        c.vim.of(x.vim),
+        c.theme.of(x.theme),
+        c.gutter.of(x.gutter),
+        c.wrap.of(x.wrap),
+        c.tab.of(x.tab),
         c.language.of(language.support ?? []),
         c.brief.of(this.#brief ? [hunkFolding, diffHighlighter] : []),
         c.readOnly.of([]),
@@ -328,13 +343,21 @@ export class EditorPane extends HTMLElement {
   /** Show a document; caches per-id editor state so switching is lossless. */
   openDocument(id, content, name) {
     const view = this.#view;
-    if (this.#docId !== null) this.#states.set(this.#docId, view.state);
+    const c = this.#compartments;
+    if (this.#docId !== null) this.#states.set(this.#docId, { state: view.state, key: this.#settingsKey() });
     this.#docId = id;
     this.#language = languageForName(name);
     const cached = this.#states.get(id);
-    if (cached && cached.doc.toString() === content) {
-      view.setState(cached);
-      view.dispatch({ effects: this.#compartments.language.reconfigure(this.#language.support ?? []) });
+    if (cached && cached.state.doc.toString() === content) {
+      // the cached state carries the compartments as they were when this document was last shown: settings
+      // changed since (vim, line numbers, wrap, tab size, light/dark) are applied on top, history and selection kept
+      view.setState(cached.state);
+      const effects = [c.language.reconfigure(this.#language.support ?? [])];
+      if (cached.key !== this.#settingsKey()) {
+        const x = this.#settingsExtensions();
+        effects.push(c.vim.reconfigure(x.vim), c.theme.reconfigure(x.theme), c.gutter.reconfigure(x.gutter), c.wrap.reconfigure(x.wrap), c.tab.reconfigure(x.tab));
+      }
+      view.dispatch({ effects });
     } else {
       view.setState(this.#buildState(content, this.#language));
     }
@@ -389,6 +412,7 @@ export class EditorPane extends HTMLElement {
 
   /** Called when the color scheme flips between light and dark. */
   setDark(dark) {
+    this.#dark = dark;
     this.#view.dispatch({ effects: this.#compartments.theme.reconfigure(dark ? darkTheme : lightTheme) });
   }
 
@@ -468,12 +492,6 @@ export class EditorPane extends HTMLElement {
     this.focus();
   }
 
-  /** Programmatic vim access (for :commands from the palette). */
-  vimExec(command) {
-    const cm = getCM(this.#view);
-    if (cm) Vim.handleEx(cm, command);
-  }
-
   /** Feed normal-mode keys to vim (e.g. 'A' to append at end of line). */
   vimKeys(keys) {
     const cm = getCM(this.#view);
@@ -525,8 +543,6 @@ export class EditorPane extends HTMLElement {
     foldedRanges(state).between(pos, pos, (from, to) => { effects.push(unfoldEffect.of({ from, to })); });
     if (effects.length) this.#view.dispatch({ effects });
   }
-
-  unfoldAll() { unfoldAll(this.#view); }
 }
 
 customElements.define('editor-pane', EditorPane);

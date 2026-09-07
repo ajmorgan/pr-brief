@@ -2,8 +2,14 @@
 // viewer.ts — serve the vendored editor (viewer/) on localhost and hand it the
 // brief. Zero dependencies.
 //
-//   node scripts/viewer.ts [--out PR_BRIEF.md] [--port N (default 8790)] [--no-open] [--verbose]
+//   node scripts/viewer.ts [--out FILE (default: the brief extract wrote last)] [--port N (default 8790)] [--no-open] [--verbose]
 //   node scripts/viewer.ts --stop        ask the running viewer to exit
+//
+// Trust: the server answers to localhost only, and the writing routes trust two parties. A tab of the
+// editor (a PUT with a same-origin Origin header), and this user's own processes, which prove themselves
+// with the token the server writes to os.tmpdir()/pr-brief-viewer-<port>.token (mode 0600, removed on
+// exit) and send as X-Viewer-Token. POST /switch and /stop require the token; PUT requires it when the
+// request carries no Origin. Any other local process — another user on a shared host — gets 403.
 //
 // Several briefs can be served at once (a stack of PRs, the last few commits): each has a slug,
 // and every brief under the repository's state directory (<common git dir>/pr-brief/<key>/) joins the list on start and on /switch.
@@ -23,9 +29,11 @@
 //                     (symbols: the same units extract would find, for the editor's outline): at the
 //                     briefed commit in commit mode, else the working tree (falling back to head, then
 //                     base, for deleted files). Read-only.
-//   POST /switch      { path, root } — add a brief (or find it) and make it current (localhost only);
+//   POST /switch      { path, root } — add a brief (or find it) and make it current (token required);
 //                     a second `viewer.ts` uses this instead of starting a second server, so one tab
-//                     at the fixed port shows every brief
+//                     at the fixed port shows every brief. `root` must be a git work tree whose common
+//                     git dir or top level holds the brief; absent, the brief's own repository is used
+//   POST /stop        exit (token required)
 //
 // The editor opens a brief through ?brief=/briefs/S (brief mode in the editor),
 // and writes back through PUT. The files on disk stay the source of truth.
@@ -33,6 +41,7 @@
 import { createServer } from "node:http";
 import { readFile, writeFile, stat, rename } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
@@ -47,11 +56,29 @@ const port = Number(opt("--port", "8790")); // fixed by default: the browser kee
 const noOpen = args.includes("--no-open");
 const verbose = args.includes("--verbose"); // log every request
 const stop = args.includes("--stop"); // tell the running viewer to exit
+// The per-server secret: written by the serving process (see onListen), read by the CLI paths that talk
+// to a running viewer. Keyed by port, so `--stop --port N` and the hand-off in main() find the right one.
+const tokenFile = (p: number): string => path.join(os.tmpdir(), `pr-brief-viewer-${p}.token`);
+const readToken = (p: number): string | null => { try { return fs.readFileSync(tokenFile(p), "utf8").trim() || null; } catch { return null; } };
+// Is a pr-brief viewer answering on the port? Its meta (path, root, viewer build), or null.
+async function probeViewer(p: number): Promise<Record<string, any> | null> {
+  const meta = await fetch(`http://127.0.0.1:${p}/brief/meta`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  return meta && typeof meta.path === "string" && "viewer" in meta ? meta : null; // a pr-brief viewer, whatever state its brief is in
+}
 if (stop) {
   // stopping a server has nothing to do with the current directory: no git, no brief
-  const r = await fetch(`http://127.0.0.1:${port}/stop`, { method: "POST" }).catch(() => null);
-  process.stdout.write(r?.ok ? `pr-brief viewer on port ${port} stopped\n` : `no pr-brief viewer on port ${port}\n`);
-  process.exit(0);
+  const meta = await probeViewer(port);
+  if (!meta) {
+    const busy = await fetch(`http://127.0.0.1:${port}/`, { method: "HEAD" }).then(() => true).catch(() => false);
+    process.stdout.write(busy ? `port ${port} is in use, but not by a pr-brief viewer — nothing stopped\n` : `no pr-brief viewer on port ${port}\n`);
+    process.exit(0);
+  }
+  const token = readToken(port);
+  const r = token ? await fetch(`http://127.0.0.1:${port}/stop`, { method: "POST", headers: { "X-Viewer-Token": token } }).catch(() => null) : null;
+  if (r?.ok) process.stdout.write(`pr-brief viewer on port ${port} stopped (was serving ${meta.path} for ${meta.root})\n`);
+  else if (!token) process.stdout.write(`pr-brief viewer on port ${port} (serving ${meta.path}) was not started by you: no token at ${tokenFile(port)}\n`);
+  else process.stdout.write(`pr-brief viewer on port ${port} refused to stop (HTTP ${r?.status ?? "error"}); its token may have been rotated\n`);
+  process.exit(r?.ok ? 0 : 1);
 }
 const rootProbe = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
 if (rootProbe.status !== 0) { process.stderr.write("viewer.ts: not inside a git repository\n"); process.exit(1); }
@@ -63,10 +90,11 @@ function stateRootOf(dir: string): string {
   const common = r.status === 0 ? r.stdout.trim() : path.resolve(dir, spawnSync("git", ["rev-parse", "--git-common-dir"], { cwd: dir, encoding: "utf8" }).stdout.trim());
   return path.join(common, "pr-brief");
 }
-// without --out: the brief extract wrote last
+// without --out: the brief extract wrote last (extract records its key in <state>/last; the brief is <state>/<key>/pr-brief-<key>.md)
 const lastKey = (dir: string): string | null => { try { return fs.readFileSync(path.join(stateRootOf(dir), "last"), "utf8").trim() || null; } catch { return null; } };
 const outArg = opt("--out");
-const briefPath = outArg ? path.resolve(root, outArg) : (() => { const k = lastKey(root); return k ? path.join(stateRootOf(root), k, `pr-brief-${k}.md`) : path.join(root, "PR_BRIEF.md"); })();
+const lastBrief = (): string => { const k = lastKey(root); if (!k) { process.stderr.write(`no brief for this repository yet (${path.join(stateRootOf(root), "last")} missing) — run extract first\n`); process.exit(1); } return path.join(stateRootOf(root), k, `pr-brief-${k}.md`); };
+const briefPath = outArg ? path.resolve(root, outArg) : lastBrief();
 const shortPath = (p: string): string => { const r = path.relative(root, p); return r.startsWith("..") ? p : r; };
 
 if (!fs.existsSync(path.join(VIEWER, "index.html"))) { process.stderr.write(`viewer not found at ${VIEWER}\n`); process.exit(1); }
@@ -221,17 +249,23 @@ function symbolsOf(rel: string, content: string): object[] {
 
 const OK_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 const LOCAL = /^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/;
+const TOKEN = randomBytes(24).toString("hex"); // this server's secret; written to tokenFile(port) once listening
+const FILE_MAX = 1 << 26; // 64 MB: the most /file serves, from the working tree or from history
 const server = createServer(async (req, res) => {
   // parsed against a fixed base: only the path and query are used, and a bad Host must not throw
   let url: URL;
   try { url = new URL(req.url ?? "/", "http://127.0.0.1"); } catch { res.writeHead(400); return res.end("bad request"); }
-  // The untrusted party on a developer machine is the browser, and everything it sends comes from
-  // 127.0.0.1. A Host that is not ours is a DNS-rebinding page; a POST or PUT with a foreign Origin is
-  // a cross-site request. The CLI's own fetch sends no Origin.
+  // Everything reaching this server comes from 127.0.0.1, so the address says nothing about who sent it.
+  // A Host that is not ours is a DNS-rebinding page; a POST or PUT with a foreign Origin is a cross-site
+  // request. A same-origin Origin marks a tab of the editor (browsers always send one on POST/PUT);
+  // the token marks this user's own processes (the CLI paths below, which send no Origin).
   const host = req.headers.host ?? "";
   if (!OK_HOST.test(host)) { res.writeHead(421, { "Content-Type": types[".txt"] }); return res.end("misdirected request: this server answers to localhost only"); }
   const origin = req.headers.origin;
-  if ((req.method === "POST" || req.method === "PUT") && typeof origin === "string" && origin !== `http://${host}`) { res.writeHead(403, { "Content-Type": types[".txt"] }); return res.end("cross-origin request refused"); }
+  const writing = req.method === "POST" || req.method === "PUT";
+  if (writing && typeof origin === "string" && origin !== `http://${host}`) { res.writeHead(403, { "Content-Type": types[".txt"] }); return res.end("cross-origin request refused"); }
+  const fromTab = writing && typeof origin === "string"; // same-origin, per the check above
+  const fromOwner = req.headers["x-viewer-token"] === TOKEN;
   if (verbose) res.on("finish", () => process.stdout.write(`${new Date().toISOString().slice(11, 19)} ${req.method} ${url.pathname}${url.search.slice(0, 120)} → ${res.statusCode}\n`));
   const text = (code: number, body: string) => { res.writeHead(code, { "Content-Type": types[".txt"] }); res.end(body); };
   try {
@@ -254,6 +288,7 @@ const server = createServer(async (req, res) => {
       return res.end(body);
     }
     if (served && !wantMeta && req.method === "PUT") {
+      if (!fromTab && !fromOwner) return text(403, "refused: a save needs the editor's Origin or this viewer's X-Viewer-Token");
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);
       const body = Buffer.concat(chunks).toString("utf8");
@@ -291,16 +326,26 @@ const server = createServer(async (req, res) => {
       const front = (await readFile(b.path, "utf8")).split("\n---\n")[0];
       const fm = (k: string) => front.match(new RegExp(`^${k}: (.+)$`, "m"))?.[1] ?? null;
       const mode = fm("mode"), head = fm("head"), base = fm("base");
-      let content: string | null = null, rev = "working tree";
-      const show = (r: string | null) => { if (!r || content !== null) return; const g = spawnSync("git", ["show", `${r}:${rel}`], { cwd: b.root, encoding: "utf8", maxBuffer: 1 << 26 }); if (g.status === 0) { content = g.stdout; rev = r.slice(0, 7); } };
-      if (mode !== "commit" && fs.existsSync(abs)) content = await readFile(abs, "utf8");
-      show(head); show(base);
-      if (content === null) return text(404, `${rel} not found in the working tree, ${head?.slice(0, 7)} or ${base?.slice(0, 7)}`);
+      let bytes: Buffer | null = null, rev = "working tree", tooLarge = false;
+      // a revision that has the file but past FILE_MAX is "too large", not "absent": git fails with ENOBUFS
+      const show = (r: string | null): Buffer | null => {
+        if (!r) return null;
+        const g = spawnSync("git", ["show", `${r}:${rel}`], { cwd: b.root, maxBuffer: FILE_MAX });
+        if (g.status === 0) { rev = r.slice(0, 7); return g.stdout; }
+        if (g.error && (g.error as NodeJS.ErrnoException).code === "ENOBUFS") tooLarge = true;
+        return null;
+      };
+      // the working tree is the version asked for: a file past the cap is 413 here, never a smaller version from history
+      if (mode !== "commit" && fs.existsSync(abs)) { if (fs.statSync(abs).size > FILE_MAX) return text(413, `${rel} is larger than ${FILE_MAX >> 20} MB — too large to show`); bytes = await readFile(abs); }
+      bytes ??= show(head); bytes ??= show(base);
+      if (bytes === null) return tooLarge ? text(413, `${rel} is larger than ${FILE_MAX >> 20} MB — too large to show`) : text(404, `${rel} not found in the working tree, ${head?.slice(0, 7)} or ${base?.slice(0, 7)}`);
+      if (bytes.subarray(0, 8192).includes(0)) return text(415, `${rel} is a binary file (${bytes.length} bytes) — nothing to show`); // a NUL in the first 8 KB: git's own heuristic
+      const content = bytes.toString("utf8");
       res.writeHead(200, { "Content-Type": types[".json"], "Cache-Control": "no-store" });
       return res.end(JSON.stringify({ name: path.basename(rel), path: rel, content, rev, mode, symbols: symbolsOf(rel, content) }));
     }
     if (url.pathname === "/stop" && req.method === "POST") {
-      if (!LOCAL.test(req.socket.remoteAddress ?? "")) { res.writeHead(403); return res.end(); }
+      if (!LOCAL.test(req.socket.remoteAddress ?? "") || !fromOwner) return text(403, "refused: /stop needs this viewer's X-Viewer-Token");
       res.writeHead(200, { "Content-Type": types[".json"] });
       res.end(JSON.stringify({ ok: true }));
       process.stdout.write("stopping\n");
@@ -308,7 +353,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (url.pathname === "/switch" && req.method === "POST") {
-      if (!LOCAL.test(req.socket.remoteAddress ?? "")) { res.writeHead(403); return res.end(); }
+      if (!LOCAL.test(req.socket.remoteAddress ?? "") || !fromOwner) return text(403, "refused: /switch needs this viewer's X-Viewer-Token");
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -316,9 +361,23 @@ const server = createServer(async (req, res) => {
       if (typeof next !== "string" || !path.isAbsolute(next) || !fs.existsSync(next) || !fs.statSync(next).isFile()) return text(422, "path must be an existing absolute file");
       // only a brief can be served: the same front-matter gate PUT applies
       if (!isBriefFile(next)) return text(422, "refused: not a PR brief");
-      // the brief's repository is where /file reads from: take it from the caller, else from the brief's directory
-      const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: path.dirname(next), encoding: "utf8" });
-      const rootDir = typeof body.root === "string" && fs.existsSync(body.root) && fs.statSync(body.root).isDirectory() ? body.root : r.status === 0 ? r.stdout.trim() : cur().root;
+      // the brief's repository is where /file reads from. The caller may name it, but only a git work tree
+      // that holds the brief — under its common git dir (the state directory) or its top level — so a
+      // brief-shaped file cannot turn an arbitrary directory into a served root. Else the brief's own repository.
+      let rootDir: string;
+      if (body.root !== undefined) {
+        if (typeof body.root !== "string" || !fs.existsSync(body.root) || !fs.statSync(body.root).isDirectory()) return text(422, "root must be an existing directory");
+        const out = (a: string[]) => { const g = spawnSync("git", ["-C", body.root, ...a], { encoding: "utf8" }); return g.status === 0 ? g.stdout.trim() : null; };
+        const top = out(["rev-parse", "--show-toplevel"]);
+        const common = top ? path.dirname(stateRootOf(top)) : null; // absolute on any git: stateRootOf keeps the pre-2.31 fallback
+        const real = (p: string | null) => { try { return p ? fs.realpathSync(p) : null; } catch { return null; } };
+        const brief = fs.realpathSync(next), holds = (d: string | null) => !!d && brief.startsWith(d + path.sep);
+        if (!common || !top || !(holds(real(common)) || holds(real(top)))) return text(422, "root must be a git work tree that holds the brief");
+        rootDir = top;
+      } else {
+        const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: path.dirname(next), encoding: "utf8" });
+        rootDir = r.status === 0 ? r.stdout.trim() : cur().root;
+      }
       const b = register(next, rootDir);
       current = b.slug;
       registerStored(rootDir);
@@ -328,8 +387,12 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": types[".json"] });
       return res.end(JSON.stringify({ ok: true, path: b.path, slug: b.slug, url: `/briefs/${b.slug}` }));
     }
-    let file = path.normalize(path.join(VIEWER, decodeURIComponent(url.pathname)));
-    if (!file.startsWith(VIEWER)) { res.writeHead(403); return res.end(); }
+    // static: decode first (the URL parser leaves %2f alone), refuse any `..` segment, then contain on a
+    // whole path component so a sibling named viewer* is never served
+    const decoded = decodeURIComponent(url.pathname);
+    if (decoded.split(/[\\/]/).includes("..")) { res.writeHead(403); return res.end(); }
+    let file = path.normalize(path.join(VIEWER, decoded));
+    if (file !== VIEWER && !file.startsWith(VIEWER + path.sep)) { res.writeHead(403); return res.end(); }
     if ((await stat(file)).isDirectory()) file = path.join(file, "index.html");
     const body = await readFile(file);
     res.writeHead(200, { "Content-Type": types[path.extname(file)] ?? "application/octet-stream", "Cache-Control": "no-store", "Service-Worker-Allowed": "/" });
@@ -343,30 +406,49 @@ const server = createServer(async (req, res) => {
 // If a pr-brief viewer is already running on the port, hand it this brief and
 // exit: the open tab follows the switch by itself. Otherwise start serving.
 async function main() {
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE" && port !== 0) { process.stderr.write(`port ${port} in use by something else — picking a free one\n`); server.listen(0, "127.0.0.1"); }
+    else { process.stderr.write(`${err.message}\n`); process.exit(1); }
+  });
   if (port !== 0) {
     try {
-      const meta = await fetch(`http://127.0.0.1:${port}/brief/meta`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      if (meta && typeof meta.path === "string" && "viewer" in meta) { // a pr-brief viewer, whatever state its brief is in
-        const r = await fetch(`http://127.0.0.1:${port}/switch`, { method: "POST", body: JSON.stringify({ path: briefPath, root }) });
-        if (r.ok) { const j = await r.json().catch(() => ({})); process.stdout.write(`pr-brief viewer already running: http://127.0.0.1:${port}/?brief=${j.url ?? "/brief"} now shows ${shortPath(briefPath)} (the open tab updates itself)\n`); return; }
+      const meta = await probeViewer(port);
+      if (meta) {
+        const token = readToken(port);
+        const r = token ? await fetch(`http://127.0.0.1:${port}/switch`, { method: "POST", headers: { "X-Viewer-Token": token }, body: JSON.stringify({ path: briefPath, root }) }) : null;
+        if (r?.ok) { const j = await r.json().catch(() => ({})); process.stdout.write(`pr-brief viewer already running: http://127.0.0.1:${port}/?brief=${j.url ?? "/brief"} now shows ${shortPath(briefPath)} (the open tab updates itself)\n`); return; }
+        // a viewer we cannot talk to (another user's, or a stale token): serve on a free port instead of failing
+        process.stderr.write(`pr-brief viewer on port ${port} ${token ? `refused the hand-off (HTTP ${r?.status})` : `was not started by you (no token at ${tokenFile(port)})`} — picking a free port\n`);
+        server.listen(0, "127.0.0.1"); return;
       }
     } catch { /* nothing listening: start our own */ }
   }
-  server.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EADDRINUSE" && port !== 0) { process.stderr.write(`port ${port} in use by something else — picking a free one\n`); server.listen(0, "127.0.0.1", onListen); }
-    else { process.stderr.write(`${err.message}\n`); process.exit(1); }
-  });
-  server.listen(port, "127.0.0.1", onListen);
+  server.listen(port, "127.0.0.1");
 }
+server.once("listening", onListen); // once, however many listen() attempts it takes
 main();
+let tokenPath: string | null = null;
+function writeToken(p: number): void {
+  tokenPath = tokenFile(p);
+  try { fs.rmSync(tokenPath, { force: true }); fs.writeFileSync(tokenPath, `${TOKEN}\n`, { mode: 0o600, flag: "wx" }); } // wx: never write through a file someone else planted
+  catch (e: any) { process.stderr.write(`cannot write ${tokenPath} (${e?.code ?? e}): --stop and the hand-off from a second viewer.ts will not reach this server\n`); tokenPath = null; }
+}
+const removeToken = () => { if (tokenPath) { try { if (fs.readFileSync(tokenPath, "utf8").trim() === TOKEN) fs.rmSync(tokenPath, { force: true }); } catch { /* already gone */ } tokenPath = null; } };
+process.on("exit", removeToken);
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => process.exit(0)); // so 'exit' runs on Ctrl-C too
 function onListen() {
   startWatchers();
   const addr = server.address();
   const p = typeof addr === "object" && addr ? addr.port : port;
+  writeToken(p);
   const url = `http://127.0.0.1:${p}/?brief=/briefs/${cur().slug}`;
   process.stdout.write(`pr-brief viewer: ${url}\n  serving ${shortPath(briefPath)}${briefs.size > 1 ? ` and ${briefs.size - 1} more brief${briefs.size > 2 ? "s" : ""} from ${shortPath(stateRootOf(root))}/` : ""} — Ctrl-C to stop\n`);
   if (!noOpen) {
-    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-    spawn(cmd, [url], { stdio: "ignore", detached: true }).unref();
+    // no browser opener (headless Linux, a container) must not take the server down with it
+    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+    const argv = process.platform === "win32" ? ["/c", "start", "", url] : [url]; // `start` is a cmd.exe builtin, not an executable
+    const child = spawn(cmd, argv, { stdio: "ignore", detached: true });
+    child.on("error", (e: NodeJS.ErrnoException) => process.stderr.write(`could not open a browser (${e.code ?? e.message}); open ${url} in your browser\n`));
+    child.unref();
   }
 }

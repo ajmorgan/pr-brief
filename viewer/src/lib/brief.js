@@ -18,7 +18,7 @@ function attrs(line) {
 }
 
 /**
- * @returns {{ files: File[], units: Unit[], overviewLine: number|null, lines: number }}
+ * @returns {{ files: File[], units: Unit[], lines: number }}
  * File: { path, status, line, end, hash, units: Unit[] }
  * Unit: { id, kind, status, hash, line, end, heading, name, touched, file, index }
  *   touched: the most recent set of changes touched this unit (the heading's `· changed since last`)
@@ -28,7 +28,6 @@ export function parseBrief(text) {
   const lines = text.split('\n');
   const files = [];
   const units = [];
-  let overviewLine = null;
   let file = null;
   let fenceLen = 0;
   let pendingHeading = null; // { text, line } for the ### heading before a unit marker
@@ -40,8 +39,6 @@ export function parseBrief(text) {
     const fm = l.match(FENCE);
     if (fenceLen === 0 && fm) { fenceLen = fm[1].length; continue; }
     if (fenceLen > 0) { if (fm && fm[1].length >= fenceLen && l.trim() === fm[1]) fenceLen = 0; continue; }
-
-    if (l.startsWith('**Overview:**') && overviewLine === null) overviewLine = n;
 
     if (l.startsWith('## ')) {
       const m = unlink(l).match(/^## `([^`]+)` — (\w+)/);
@@ -89,11 +86,19 @@ export function parseBrief(text) {
     const us = files[f].units;
     for (let u = 0; u < us.length; u++) us[u].end = us[u + 1] ? us[u + 1].line - 1 : end;
   }
-  return { files, units, overviewLine, lines: lines.length };
+  return { files, units, lines: lines.length };
 }
 
 /** Strip the link wrapper extract puts around paths: [`x`](x#L1) → `x`. */
 function unlink(text) { return text.replace(/\[(`[^`]*`)\]\([^)]*\)/g, '$1'); }
+
+/** A line that starts a labelled slot or section, as scripts/brief-format.ts isLabelLine sees it: the slot labels,
+ *  `**<Kind> Context:**`, and the section labels. Only these end a slot value; a bold line inside a slot
+ *  (`**Important:** …`) is a continuation and is kept. */
+const LABEL_LINE = /^\*\*(?:Overview|Purpose|Changes|Delta|Does|Change|Did|Review Observations|Notes|(?:[A-Z][A-Za-z]* )?Context|(?:Callers|References) \(by name\)|Other changes):\*\*/;
+export function isLabelLine(line) {
+  return LABEL_LINE.test(line);
+}
 
 /** A unit's prose slots as written in the brief: { purpose, changes, notes }, missing keys absent;
  *  contextLabel is the description's label as written ("Function Context", …; older briefs: "Purpose"). */
@@ -112,7 +117,7 @@ export function unitSlots(text, unit) {
     const parts = [m[2]];
     for (let j = i + 1; j < lines.length; j++) {
       const n = lines[j];
-      if (n.trim() === '' || n.startsWith('<!--') || n.startsWith('```') || n.startsWith('**') || n.startsWith('#')) break;
+      if (n.trim() === '' || n.startsWith('<!--') || n.startsWith('```') || isLabelLine(n) || n.startsWith('#') || n === '---') break;
       parts.push(n);
     }
     const v = parts.join('\n').trim();
@@ -146,9 +151,15 @@ export function fileAt(brief, line) {
   return brief.files.find((f) => line >= f.line && line <= f.end) ?? null;
 }
 
-/** Next (dir=1) or previous (dir=-1) unit from `line`; `changedOnly` skips untouched units. Wraps. */
+/** What the `changed` filter keeps: a unit the most recent set of changes touched (brief), or a symbol that
+ *  is a unit in the brief (source outline, `badge`). The outline, the status count and ]u/[u share it. */
+export function isChanged(unit) {
+  return !!(unit.touched || unit.badge);
+}
+
+/** Next (dir=1) or previous (dir=-1) unit from `line`; `changedOnly` steps only through isChanged units. Wraps. */
 export function stepUnit(brief, line, dir, changedOnly = false) {
-  const list = changedOnly ? brief.units.filter((u) => u.touched) : brief.units;
+  const list = changedOnly ? brief.units.filter(isChanged) : brief.units;
   if (!list.length) return null;
   if (dir > 0) return list.find((u) => u.line > line) ?? list[0];
   const before = list.filter((u) => u.line < line);

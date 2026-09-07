@@ -40,7 +40,8 @@ function main(): void {
   const state = unitsOf(stateDir);
   const outAbs = path.resolve(root, state.out);
   if (!fs.existsSync(outAbs)) { process.stderr.write(`${outAbs} not found — run extract.ts first\n`); process.exit(1); }
-  const text = fs.readFileSync(outAbs, "utf8");
+  const raw = fs.readFileSync(outAbs, "utf8");
+  const text = raw.replace(/\r\n/g, "\n"); // a CRLF save (Windows editor, autocrlf checkout) is the same brief; written back as LF
   const brief = parseBrief(text);
   const problems: string[] = [];
   const P = (kind: string, where: string, msg: string) => problems.push(`${kind.padEnd(9)} ${where}  — ${msg}`);
@@ -58,17 +59,25 @@ function main(): void {
   // empty slots
   for (const t of brief.tokens) P("EMPTY", `${t.token} (line ${t.line})`, "write it");
 
-  // a list under the Overview after a blank line is outside the slot: the parser ignores it and the
-  // next regeneration drops it. Catch it here rather than lose the bullets silently.
+  // a list under a slot label after a blank line is outside the slot: the parser ignores it and the
+  // next regeneration drops it. Catch it here, for every slot, rather than lose the bullets silently.
   {
     const lines = text.split("\n");
-    let i = lines.findIndex((l) => l.startsWith("**Overview:**"));
-    if (i >= 0) {
-      while (i < lines.length && lines[i].trim() !== "") i++; // the slot: label line through the last non-blank line
-      let j = i;
+    const SLOT_LINE = /^\*\*(Overview|Changes|Review Observations|Notes|(?:[A-Z][A-Za-z]* )?Context):\*\*/;
+    let fenceLen = 0; // hunk lines never start with `**`, but stay fence-aware like the parser
+    for (let i = 0; i < lines.length; i++) {
+      const fm = lines[i].match(/^(`{3,})/);
+      if (fenceLen === 0 && fm) { fenceLen = fm[1].length; continue; }
+      if (fenceLen > 0) { if (fm && fm[1].length >= fenceLen && lines[i].trim() === fm[1]) fenceLen = 0; continue; }
+      const m = lines[i].match(SLOT_LINE);
+      if (!m) continue;
+      let k = i;
+      while (k < lines.length && lines[k].trim() !== "") k++; // the slot: label line through the last non-blank line
+      let j = k;
       while (j < lines.length && lines[j].trim() === "") j++;
       if (j < lines.length && /^\s*- /.test(lines[j]) && !lines[j].startsWith("---"))
-        P("STRUCTURE", `**Overview:** (line ${j + 1})`, "a bullet list follows the Overview after a blank line, outside the slot — delete the blank line so the bullets sit directly under the lead sentence");
+        P("STRUCTURE", `${m[0]} (line ${j + 1})`, `a bullet list follows the ${m[1]} after a blank line, outside the slot — delete the blank line so the bullets sit directly under the label line`);
+      i = k - 1;
     }
   }
 
@@ -97,7 +106,8 @@ function main(): void {
         if (!s.slots[key]?.locked) { const st = styleProblem(v); if (st) P("STYLE", `${labelOf(key)} ${s.path}`, `${st} is filler or restates the heading — cut it`); }
       }
       const ch = f.slots.changes;
-      if (ch && !isToken(ch)) for (const n of s.unitNames) if (!ch.includes(n)) P("MISSING", `**Changes:** ${s.path}`, `does not name unit \`${n}\` — mention it`);
+      // the slot instruction lists the names with `>` written as `›` (`>>` ends the token), so a name copied from it counts
+      if (ch && !isToken(ch)) for (const n of s.unitNames) if (!ch.includes(n) && !ch.includes(n.replace(/>/g, "›"))) P("MISSING", `**Changes:** ${s.path}`, `does not name unit \`${n}\` — mention it`);
       checkReview(f.slots.review, s.slots.review, `**Review Observations:** ${s.path}`);
       if (s.notes && f.slots.notes !== s.notes) P("NOTES", `**Notes:** ${s.path}`, "reviewer notes were altered — restore them exactly");
       continue;
@@ -135,7 +145,7 @@ function main(): void {
     process.exit(1);
   }
   const cleaned = listOnNextLine(stripReviseNotes(text)).replace(/\n{3,}/g, "\n\n"); // a list value goes on the line after its label
-  if (cleaned !== text) fs.writeFileSync(outAbs, cleaned);
+  if (cleaned !== raw) fs.writeFileSync(outAbs, cleaned);
   // archive the clean brief beside its state, and every (id@hash) → prose in the repository-wide cache,
   // so switching modes, briefing under another key, or reverting code never loses prose
   fs.writeFileSync(path.join(stateDir, "last.md"), cleaned);

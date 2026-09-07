@@ -43,8 +43,6 @@ export class FileList extends HTMLElement {
   get documents() { return this.#docs; }
   set activeId(id) { this.#activeId = id; this.#render(); }
 
-  focusSearch() { this.#search.focus(); this.#search.select(); }
-
   #onClick(e) {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;

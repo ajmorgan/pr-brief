@@ -90,13 +90,20 @@ function applySettings({ persist = true } = {}) {
   els.diffSwitch.hidden = !brief;
   for (const btn of els.diffSwitch.querySelectorAll('button[data-diff]')) btn.setAttribute('aria-pressed', String(btn.dataset.diff === settings.diffView));
   els.docActions.hidden = !!(active?.remote || active?.readOnly);
+  // a served brief is named by the server, a read-only source copy by the repository: neither is renamed here
+  els.name.readOnly = !!(active?.remote || active?.readOnly);
+  els.name.title = els.name.readOnly ? (active.remote ? 'Named by the pr-brief viewer' : 'Read-only copy: the name is the file\'s') : 'Rename (Enter to confirm)';
   const checks = { vim: settings.vim, wrap: settings.lineWrap, numbers: settings.lineNumbers, sync: settings.scrollSync };
   for (const [k, v] of Object.entries(checks)) els.moreMenu.querySelector(`[data-menu="${k}"]`)?.setAttribute('aria-checked', String(!!v));
   els.moreMenu.querySelector('[data-menu="zen"]').textContent = settings.zen ? 'Leave zen mode' : 'Zen mode';
   els.sidebarToggle.setAttribute('aria-expanded', String(sidebarOpen));
   if (persist) saveSettings(settings);
-  schedulePreview();
+  // the preview is Markdown rendered from the document: re-render only when something that shapes that HTML
+  // changed (the document, the view, the diff layout, brief mode, the brief's file-link base), not for chrome
+  const key = [active?.id, effectiveView(), settings.diffView, !!brief, briefFrom()].join('|');
+  if (key !== previewKey) { previewKey = key; schedulePreview(); }
 }
+let previewKey = null;
 
 function update(patch) {
   Object.assign(settings, patch);
@@ -242,7 +249,7 @@ async function closeDocument() {
 
 async function renameDocument(name) {
   name = name.trim();
-  if (!active || !name || name === active.name) { els.name.value = active?.name ?? ''; return; }
+  if (!active || active.remote || active.readOnly || !name || name === active.name) { els.name.value = active?.name ?? ''; return; }
   active.name = name;
   active.updatedAt = Date.now();
   await store.putDocument(active);
@@ -304,7 +311,7 @@ async function save() {
       // Refuse to clobber a file someone else wrote since we read it (an agent
       // regenerating a brief, another editor): the user reloads first.
       if (active.mtime != null && await changedOnDisk()) {
-        els.toast.show(`${active.name} changed on disk since you opened it. Reload (:rel) before saving.`, { kind: 'error', duration: 8000, action: 'Reload', onAction: reload });
+        els.toast.show(CHANGED_ON_DISK(active.name), { kind: 'error', duration: 8000, action: 'Reload', onAction: reload });
         return;
       }
       const content = els.editor.getValue();
@@ -320,12 +327,17 @@ async function save() {
       await store.putDocument(active);
       diskDirty = false; updateSavedStatus(); els.toast.show(`Saved ${active.name}`);
     } catch (err) {
-      els.toast.show(`Save failed: ${err.message}`, { kind: 'error' });
+      // 412: the server saw a newer file than the one this tab read (the mtime check above raced a write)
+      if (err.status === 412) els.toast.show(CHANGED_ON_DISK(active.name), { kind: 'error', duration: 8000, action: 'Reload', onAction: reload });
+      else els.toast.show(`Save failed: ${err.message}`, { kind: 'error' });
     }
   } else {
     await saveAs();
   }
 }
+
+/** The one message for a file that moved on under unsaved edits: reload() keeps those edits in a copy. */
+const CHANGED_ON_DISK = (name) => `${name} changed on disk. Reload (:rel) to see the new version; your unsaved edits will be kept in a separate document.`;
 
 async function changedOnDisk() {
   const now = active.remote ? await files.remoteMtime(active.remote) : (await active.handle.getFile()).lastModified;
@@ -339,6 +351,14 @@ async function reload({ quiet = false } = {}) {
     const fresh = active.remote ? await files.fetchRemote(active.remote) : await files.readHandle(active.handle);
     const line = els.editor.cursorLine;
     const scrollTop = els.editor.view.scrollDOM.scrollTop;
+    // unsaved edits (the reviewer's notes) are never dropped: they move to a browser-only document first
+    const current = els.editor.getValue();
+    let kept = null;
+    if (diskDirty && current !== fresh.content) {
+      const dot = active.name.lastIndexOf('.');
+      const stem = dot > 0 ? active.name.slice(0, dot) : active.name;
+      kept = await createDocument({ name: uniqueName(`${stem} (your edits)${dot > 0 ? active.name.slice(dot) : ''}`), content: current, open: false });
+    }
     els.editor.setValue(fresh.content);
     active.content = fresh.content;
     active.mtime = fresh.mtime;
@@ -354,7 +374,8 @@ async function reload({ quiet = false } = {}) {
     else els.editor.gotoLine(switched ? 1 : line);
     if (switched) await refreshList();
     updateSavedStatus();
-    if (!quiet) els.toast.show(`Reloaded ${active.name}`);
+    if (kept) els.toast.show(`Reloaded ${active.name}. Your edits are kept in ${kept.name} (in this browser).`, { duration: 8000 });
+    else if (!quiet) els.toast.show(`Reloaded ${active.name}`);
   } catch (err) {
     if (!quiet) els.toast.show(`Reload failed: ${err.message}`, { kind: 'error' });
   }
@@ -391,8 +412,13 @@ async function onWatchMeta(meta) {
     if (active.remote) {
       meta ??= await files.remoteMeta(active.remote);
       // the frame describes every served brief: this document's own entry decides its mtime and repo (the top level is the current brief)
-      const mine = Array.isArray(meta.briefs) ? meta.briefs.find((b) => new URL(b.url, active.remote).toString() === active.remote) ?? null : null;
-      briefMeta = mine ? { ...meta, ...mine, viewer: meta.viewer } : meta;
+      const listed = Array.isArray(meta.briefs);
+      const mine = listed ? meta.briefs.find((b) => new URL(b.url, active.remote).toString() === active.remote) ?? null : null;
+      // absent from the list (moved or deleted on disk): the top level describes another brief, so the last
+      // meta this document had stands, and its text is left alone
+      if (mine) briefMeta = { ...meta, ...mine, viewer: meta.viewer };
+      else if (!listed) briefMeta = meta; // an older server: one brief, its meta at the top level
+      if (mine && watchNotifiedFor === 'gone') watchNotifiedFor = null;
       // the viewer's own code was rebuilt (build.mjs --stamp): this page is stale, reload it
       if (meta.viewer) {
         if (viewerBuild === null) viewerBuild = meta.viewer;
@@ -407,13 +433,17 @@ async function onWatchMeta(meta) {
       }
       await syncBriefs(meta, active.remote);
       if (await followCurrent(meta, active.remote)) return;
-      if (typeof briefMeta.mtime !== 'number' || Math.abs(briefMeta.mtime - active.mtime) <= 1) return; // filesystems round mtimes
+      if (listed && !mine) {
+        if (watchNotifiedFor !== 'gone') { watchNotifiedFor = 'gone'; els.toast.show(`${active.name} is no longer served: the file moved or was deleted. This copy stays open.`, { duration: 8000 }); }
+        return;
+      }
+      if (typeof briefMeta?.mtime !== 'number' || Math.abs(briefMeta.mtime - active.mtime) <= 1) return; // filesystems round mtimes
     } else if (!(await changedOnDisk())) return;
     if (diskDirty) {
       const now = active.remote ? briefMeta.mtime : (await active.handle.getFile()).lastModified;
       if (watchNotifiedFor === now) return;
       watchNotifiedFor = now;
-      els.toast.show(`${active.name} changed on disk. Your unsaved edits are kept; reload to see the new version.`, { duration: 8000, action: 'Reload', onAction: reload });
+      els.toast.show(CHANGED_ON_DISK(active.name), { duration: 8000, action: 'Reload', onAction: reload });
       return;
     }
     await reload({ quiet: true });
@@ -638,7 +668,6 @@ function enterBriefMode(content, { fold = false } = {}) {
   setBriefRendering(on, { split: settings.diffView === 'split', from: briefFrom() });
   if (on && fold) els.editor.foldHunks();
   setOutline();
-  if (!outline) els.status.update({ words: undefined });
 }
 
 // --- Outline: the brief's files and units, or the active source file's symbols ---
@@ -654,7 +683,7 @@ function sourceOutline(doc) {
     id: s.id, kind: s.kind, status: '', hash: '', line: s.line, end: s.end, heading: s.display,
     name: s.scope ? `${s.scope}.${s.name}` : s.name, touched: false, badge: inBrief.has(s.id) ? 'brief' : '', file, index,
   }));
-  return { files: [file], units: file.units, overviewLine: null, lines: file.end };
+  return { files: [file], units: file.units, lines: file.end };
 }
 
 function setOutline() {
@@ -684,7 +713,7 @@ function updateBriefStatus(line) {
   if (!outline) return;
   const u = briefs.unitAt(outline, line);
   const noun = brief ? 'unit' : 'symbol';
-  const changed = outline.units.filter((x) => x.touched || x.badge).length;
+  const changed = outline.units.filter(briefs.isChanged).length;
   els.status.update({ words: (u ? `${noun} ${u.index + 1}/${outline.units.length}` : `${outline.units.length} ${noun}s`) + (changed ? (brief ? ` · ${changed} changed` : ` · ${changed} in brief`) : '') });
 }
 
@@ -789,7 +818,7 @@ els.outline.addEventListener('open-brief', (e) => {
 
 // Position in the brief (cursor line, preview scroll) saved when the page navigates away — following a
 // file link — and restored when the brief loads again, so browser back returns to the same place.
-const posKey = (url) => `rb:pos:${url}`;
+const posKey = (url) => `xor:pos:${url}`;
 addEventListener('pagehide', () => {
   if (!active?.remote) return;
   try { sessionStorage.setItem(posKey(active.remote), JSON.stringify(currentPosition())); } catch { /* storage unavailable */ }
@@ -811,13 +840,27 @@ function rememberClosed(remote, closed) {
   try { localStorage.setItem(CLOSED_KEY, JSON.stringify([...closedBriefs])); } catch { /* storage unavailable */ }
 }
 let currentBrief = null;
+// the last server `current` this tab saw, kept across page loads in this tab: a hand-off that happened while the
+// tab showed a source file (no watch runs there) is caught by the first frame after the brief page comes back
+const CURRENT_KEY = 'xor:current-brief';
+function setCurrentBrief(slug) {
+  currentBrief = slug;
+  try { sessionStorage.setItem(CURRENT_KEY, slug); } catch { /* storage unavailable */ }
+}
+function storedCurrentBrief() { try { return sessionStorage.getItem(CURRENT_KEY); } catch { return null; } }
 let briefSync = Promise.resolve(); // one sync at a time: the page and the first event frame would otherwise add the same briefs twice
 function syncBriefs(meta, baseUrl) { return (briefSync = briefSync.then(() => syncBriefsNow(meta, baseUrl)).catch(() => {})); }
 async function syncBriefsNow(meta, baseUrl) {
   if (!Array.isArray(meta?.briefs)) return;
+  // a closed brief that this server's repositories no longer serve (a per-commit brief that was deleted) is
+  // forgotten, so the list does not grow forever; entries for other repositories (another port) are kept
+  const served = new Set(meta.briefs.map((b) => b.path).filter(Boolean));
+  const stateDirs = [...served].map((p) => p.match(/^(.*\/pr-brief\/)[^/]+\/[^/]+$/)?.[1]).filter(Boolean); // <git dir>/pr-brief/ above <key>/<file>
+  for (const p of [...closedBriefs]) if (!served.has(p) && stateDirs.some((d) => p.startsWith(d))) rememberClosed(p, false);
   let added = false;
   for (const b of meta.briefs) {
     const remote = new URL(b.url, baseUrl).toString();
+    if (new URL(remote).origin !== location.origin) continue; // the list only ever names this server's briefs
     if (closedBriefs.has(b.path ?? remote) || docs.some((d) => d.remote === remote)) continue;
     try { const f = await files.fetchRemote(remote); await createDocument({ name: f.name, content: f.content, remote, mtime: f.mtime, path: b.path ?? null, open: false }); added = true; }
     catch { /* gone between the frame and the fetch */ }
@@ -825,9 +868,10 @@ async function syncBriefsNow(meta, baseUrl) {
   if (added) await refreshList();
 }
 async function followCurrent(meta, baseUrl) {
-  const was = currentBrief;
-  currentBrief = meta?.current ?? currentBrief;
-  if (!meta?.current || was === null || was === meta.current) return false;
+  if (!meta?.current) return false;
+  const was = currentBrief ?? storedCurrentBrief(); // null only in a tab that never saw a brief page: no hand-off to follow
+  setCurrentBrief(meta.current);
+  if (was === null || was === meta.current) return false;
   const remote = new URL(`/briefs/${meta.current}`, baseUrl).toString();
   let target = docs.find((d) => d.remote === remote);
   if (!target) {
@@ -841,8 +885,10 @@ async function followCurrent(meta, baseUrl) {
   return true;
 }
 
-/** ?brief=<url>: open (or refresh) the document served by a local pr-brief viewer. */
-async function openRemoteBrief(url) {
+/** ?brief=<url>: open (or refresh) the document served by a local pr-brief viewer. `baseline` makes the server's
+ *  current brief this tab's baseline (an explicit request is never overridden); a back/forward return leaves it,
+ *  so the first watch frame follows a hand-off (extract --open) that happened while the tab showed a file. */
+async function openRemoteBrief(url, { baseline = true } = {}) {
   let fresh = await files.fetchRemote(url);
   // /brief is whichever brief is current: open it under its own /briefs/<slug> URL, so several can be open at once
   const canonical = fresh.meta?.current && new URL(url).pathname === '/brief' ? new URL(`/briefs/${fresh.meta.current}`, url).toString() : url;
@@ -851,7 +897,7 @@ async function openRemoteBrief(url) {
     if (legacy && !docs.some((d) => d.remote === canonical)) { legacy.remote = canonical; await store.putDocument(legacy); }
     url = canonical; fresh = await files.fetchRemote(url);
   }
-  currentBrief = fresh.meta?.current ?? currentBrief;
+  if (baseline && fresh.meta?.current) setCurrentBrief(fresh.meta.current);
   rememberClosed(fresh.meta?.path ?? url, false); // asked for by URL: never treated as closed
   let doc = docs.find((d) => d.remote === url);
   if (doc && fresh.meta?.path && doc.path !== fresh.meta.path) { doc.path = fresh.meta.path; await store.putDocument(doc); }
@@ -863,7 +909,7 @@ async function openRemoteBrief(url) {
     await openDocument(doc.id);
     diskDirty = true;
     updateSavedStatus();
-    if (moved) els.toast.show(`${fresh.name} changed on disk. Your unsaved edits are kept; reload to see the new version.`, { duration: 8000, action: 'Reload', onAction: reload });
+    if (moved) els.toast.show(CHANGED_ON_DISK(fresh.name), { duration: 8000, action: 'Reload', onAction: reload });
     else els.toast.show(`Opened ${fresh.name} with your unsaved edits`);
     await syncBriefs(fresh.meta, url);
     return;
@@ -939,7 +985,7 @@ function commands() {
     { id: 'switch', label: 'Switch document…', keys: `${modKey} ⇧ F`, run: pickDocument },
     { id: 'save', label: 'Save', keys: `${modKey} S`, run: save },
     { id: 'saveas', label: 'Save as…', keys: `${modKey} ⇧ S`, run: saveAs },
-    { id: 'rename', label: 'Rename document', run: () => { els.name.focus(); els.name.select(); } },
+    { id: 'rename', label: 'Rename document', run: () => { if (els.name.readOnly) { els.toast.show(els.name.title); return; } els.name.focus(); els.name.select(); } },
     { id: 'download', label: 'Download document', run: () => active && files.download(active.name, els.editor.getValue()) },
     { id: 'export', label: 'Export preview as HTML', run: exportHTML },
     { id: 'copyhtml', label: 'Copy preview HTML to clipboard', run: async () => { await navigator.clipboard.writeText(markdownToHTML(els.editor.getValue())); els.toast.show('HTML copied'); } },
@@ -1254,6 +1300,8 @@ async function boot() {
     const b = (from && docs.find((d) => d.remote && new URL(d.remote).pathname === from)) || docs.find((d) => d.remote);
     if (b) { params.delete('file'); params.delete('line'); params.delete('from'); params.set('brief', new URL(b.remote).pathname); }
   }
+  // ?brief= names a brief on this server; a link to another host is refused before anything is read from it
+  const briefUrl = params.has('brief') ? sameOriginUrl(params.get('brief')) : null;
   if (params.has('file')) {
     try { await openSourceFile(params.get('file'), Number(params.get('line')) || 0, params.get('from')); }
     catch (err) {
@@ -1261,11 +1309,17 @@ async function boot() {
       if (!docs.length) await createDocument({ name: WELCOME_NAME, content: WELCOME });
       else await openDocument((docs.find((d) => d.id === settings.lastDocId) ?? docs[0]).id);
     }
-  } else if (params.has('brief')) {
-    const url = new URL(params.get('brief'), location.href).toString();
+  } else if (params.has('brief') && !briefUrl) {
+    // this tab would read, watch and PUT the reviewer's notes to that host
+    els.toast.show(`Ignored ?brief=${params.get('brief')}: not this viewer`, { kind: 'error', duration: 8000 });
+    history.replaceState(null, '', location.pathname);
+    if (!docs.length) await createDocument({ name: WELCOME_NAME, content: WELCOME });
+    else await openDocument((docs.find((d) => d.id === settings.lastDocId) ?? docs[0]).id);
+  } else if (briefUrl) {
+    const url = briefUrl;
     try {
       if (params.has('unit')) takeStoredPosition(url); // an explicit landing beats a remembered place
-      await openRemoteBrief(url);
+      await openRemoteBrief(url, { baseline: !traversal });
       // ?unit=<id>: arrived from a source file's outline — land on that unit
       const unitId = params.get('unit');
       if (unitId && brief) { const u = brief.units.find((x) => x.id === unitId); if (u) jumpToUnit(u); history.replaceState(null, '', `?brief=${encodeURIComponent(params.get('brief'))}`); }
@@ -1283,9 +1337,14 @@ async function boot() {
     const target = docs.find((d) => d.id === settings.lastDocId) ?? docs[0];
     await openDocument(target.id);
   }
-  if (params.has('new') || params.has('source')) history.replaceState(null, '', location.pathname);
+  if (params.has('new')) history.replaceState(null, '', location.pathname);
   store.requestPersistence();
   els.app.classList.add('ready');
+}
+
+/** A ?brief= value as an absolute URL on this origin, or null: the viewer only talks to the server that served it. */
+function sameOriginUrl(value) {
+  try { const u = new URL(value, location.href); return u.origin === location.origin ? u.toString() : null; } catch { return null; }
 }
 
 boot().catch((err) => {

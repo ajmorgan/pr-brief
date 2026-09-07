@@ -17,7 +17,7 @@ npm run dev        # http://127.0.0.1:8787/
 
 ## Features
 
-- **Vim mode** via `@replit/codemirror-vim`: normal, insert, visual, replace, registers, macros, `/` search, and an ex command line with app commands (`:w`, `:wq`, `:q`, `:e`, `:new`, `:colo`, `:set`, `:pre`, `:sp`, `:zen`, `:lang`, `:export`, `:h`). Toggle it off with `⌘⇧V` for a conventional editor.
+- **Vim mode** via `@replit/codemirror-vim`: normal, insert, visual, replace, registers, macros, `/` search, and an ex command line with app commands (`:w`, `:wq`, `:q`, `:e`, `:new`, `:sav`, `:colo`, `:set`, `:pre`, `:sp`, `:zen`, `:lang`, `:export`, `:files`, `:h`). Toggle it off with `⌘⇧V` for a conventional editor.
 - **Color schemes**: One Dark, GitHub Light/Dark, Dracula, Nord, Gruvbox Dark/Light, Solarized Dark/Light, Catppuccin Mocha/Latte, Tokyo Night, Rosé Pine Dawn, Monokai. Each scheme is one object in `src/lib/themes.js` that drives the app chrome, the editor, and preview code blocks through CSS custom properties. "Follow system" tracks `prefers-color-scheme`.
 - **Markdown preview**: GitHub-flavored Markdown (tables, task lists, fenced code highlighted with the editor's grammars), sanitized with DOMPurify, editor/split/preview layouts, proportional scroll sync, double-click a block to jump to its source, export to standalone HTML, print.
 - **Code**: 36 languages detected from the file name (JS/TS/JSX/TSX, HTML, CSS, JSON, Python, Rust, C/C++, C#, Go, Java, Kotlin, Swift, SQL, YAML, TOML, Shell, Ruby, Lua, and more), bracket matching, autocompletion, code folding, multiple cursors, search and replace.
@@ -27,7 +27,7 @@ npm run dev        # http://127.0.0.1:8787/
 
 ## PR-brief mode
 
-A document whose front matter starts `pr-brief:` (written by the `pr-brief` Claude Code skill) gets an outline of files and units in the sidebar, folded `diff` hunks, `]u`/`[u` unit motions, `:unit`, `:file`, `:note`, `:changed`, and `:rel` (reload from disk). Open one with `?brief=/briefs/<slug>` from the skill's local server (`:w` PUTs back; saves are refused if the file changed on disk since it was read) or from disk like any other file. The server serves several briefs at once; every one it lists appears in the Open list, and a file link opens the file at that brief's commit. See `src/lib/brief.js` and `src/components/brief-outline.js`.
+A document whose front matter starts `pr-brief:` (written by the `pr-brief` Claude Code skill) gets an outline of files and units in the sidebar, folded `diff` hunks, `]u`/`[u` unit motions, `:unit`, `:file`, `:note`, `:copy` (the unit as a PR comment on the clipboard), `:changed`, and `:rel` (reload from disk). Open one with `?brief=/briefs/<slug>` from the skill's local server (`:w` PUTs back; saves are refused if the file changed on disk since it was read) or from disk like any other file. The server serves several briefs at once; every one it lists appears in the Open list, and a file link opens the file at that brief's commit. See `src/lib/brief.js` and `src/components/brief-outline.js`.
 
 ## Layout
 
@@ -45,7 +45,7 @@ src/lib/                themes, settings (localStorage), store (IndexedDB),
 src/vendor-entry.js     the npm imports; bundled by esbuild into vendor/editor.js
 ```
 
-Only the third-party editor libraries are bundled. The application itself is plain ES modules loaded by the browser, built on the web platform directly: custom elements with light DOM, a small observable state helper instead of a framework, `<dialog>` for modals, IndexedDB for records, localStorage for tiny preferences, and the File System Access API for user-owned documents.
+Only the third-party editor libraries are bundled. The application itself is plain ES modules loaded by the browser, built on the web platform directly: custom elements with light DOM, plain module state and DOM events instead of a framework (`src/lib/state.js` holds only `debounce`, `isMac` and `modKey`), `<dialog>` for modals, IndexedDB for records, localStorage for tiny preferences, and the File System Access API for user-owned documents.
 
 ## Design notes
 

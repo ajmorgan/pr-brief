@@ -73,8 +73,6 @@ export class MarkdownPreview extends HTMLElement {
     this.#spyActive = null;
   }
 
-  get html() { return this.#article.innerHTML; }
-
   #collectBlocks() {
     this.#blocks = [...this.#article.querySelectorAll('[data-line]')]
       .map((el) => ({ el, line: Number(el.dataset.line), card: el.closest('section.rb-file') }))

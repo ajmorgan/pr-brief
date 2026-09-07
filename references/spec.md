@@ -32,7 +32,7 @@ What this skill does differently: it runs **locally and pre-PR** (uncommitted wo
 
 - Hunting for bugs (that is `/code-review`). The brief's `Review Observations:` slot records what a careful reader notices in passing; it is not a review pass.
 - Semantic rename detection. Renamed files come from git (`-M`) and renamed units from a similarity heuristic (§12); nothing deeper.
-- A viewer. Output is Markdown with `path:line` links; any editor or the terminal renders it.
+- A hosted viewer. Output is Markdown with `path:line` links that GitHub, any editor or the terminal renders; the bundled editor (§18) is a local reader and note-taker for that same file, never a second copy of it.
 - Explaining *why* a change was made.
 - Languages without a rules directory (§6.2a lists the thirteen that have one); they get the whole-file fallback.
 
@@ -51,9 +51,11 @@ Four modes cover the real cases. Anything else is an escape hatch.
 - **wip** — "what did the agent just do." `git diff HEAD`.
 - **branch** — "everything on this branch." Note the **merge-base**, not `origin/main..HEAD`: a two-dot diff against `origin/main` would include every upstream commit landed since you branched, shown as if you had reverted them. `git diff $(git merge-base origin/main HEAD)` shows only your side. It includes uncommitted work, because "the whole branch" as a reviewer means it. Base branch name is configurable (`--base <ref>`, default `origin/main`); the skill does not fetch — run `git fetch` first if the base may be stale.
 - **commit** — one commit, for stepping through a history (`commit HEAD~3`, `commit <sha>`). The new side is the commit, not the working tree: the skeleton tells the agent to read files with `git show <sha>:<path>`, callers are found with `git grep` at that commit, and the snapshot is the commit itself. A root commit diffs against the empty tree.
-- Options: `--base <ref>` (branch mode), `--key <name>` (name the brief; §9a), `--path DIR` (limit the diff and the caller search), `--exclude PATHSPEC` (repeatable), `--no-untracked` (§14), `--full-fn-max N` (default 150; 0 = always the full body), `--out PATH` (default `<git dir>/pr-brief/<key>/pr-brief-<key>.md`, §9a), `--list` (extraction only, prints the unit table §7 — no prose), `--fresh` (ignore every earlier brief and the cache; §15), `--check` (preflight only), `--section PATH` (print one file's section), `--open` (start the viewer, §18).
+- Options: `--base <ref>` (branch mode), `--key <name>` (name the brief; §9a), `--path DIR` (limit the diff and the caller search), `--exclude PATHSPEC` (repeatable), `--no-untracked` (§14), `--full-fn-max N` (default 150; 0 = always the full body), `--out PATH` (default `<git dir>/pr-brief/<key>/pr-brief-<key>.md`, §9a), `--list` (extraction only, prints the unit table §7 — no prose), `--fresh` (ignore every earlier brief and the cache; §15), `--check` (preflight only), `--section PATH` (print one file's section as it would be written; writes nothing), `--open` (start the viewer, §18).
 
 The brief file itself is always excluded from the diff (§6.1), otherwise the second run would describe the first.
+
+An option given without its value (`--key` as the last argument, `branch --base`, a value that starts with `-`), an unknown argument, or a non-numeric `--full-fn-max` exits **1** with the usage text. Exit 2 is reserved for a missing dependency (§4a).
 
 ## 4a. Preflight
 
@@ -65,7 +67,7 @@ Extract's first action, before touching git, is to verify its dependencies. Any 
 | ast-grep minimum version | parse `--version`; minimum pinned during implementation to the version whose `scan --json` schema the rules were written against | `ast-grep <found> is too old; need >= <min>. brew upgrade ast-grep` |
 | `git` on `PATH` and inside a work tree | `git rev-parse --is-inside-work-tree` | `pr-brief must be run inside a git repository` |
 | base ref resolves (branch mode) | `git rev-parse --verify <base>` | `<base> does not exist. Run git fetch, or pass --base <ref>` |
-| script runtime | whichever of `node` / `bun` the scripts target | `pr-brief scripts need node >= <min>` |
+| script runtime | `node` ≥ 22.18 (`NODE_MIN` in `extract.ts`; the first version that strips types from a `.ts` file without a flag) | `pr-brief scripts need node >= 22.18` |
 
 `extract --check` runs only the preflight and reports, so a user can verify a machine without generating anything.
 
@@ -102,7 +104,7 @@ Parse each `@@ -oldStart,oldLen +newStart,newLen @@` header. For each file colle
 - `newRanges`: `[newStart, newStart+newLen)` for hunks with `newLen > 0`
 - `oldRanges`: `[oldStart, oldStart+oldLen)` for hunks with `oldLen > 0`
 
-Also record file status from `git diff --name-status <range>`: `A` (added), `D` (deleted), `M` (modified), `R` (renamed, paired by git `-M`: one section under the new path, `renamed from <old>` in its heading, old content read from the old path — see §12), and whether git considers the file binary.
+Also record file status from `git diff --name-status <range>`: `A` (added), `D` (deleted), `M` (modified), `R` (renamed, paired by git `-M`: one section under the new path, `renamed from <old>` in its heading, old content read from the old path — see §12), and whether git considers the file binary. A type change (`T`, e.g. a file replaced by a symlink) is briefed as a modification and a copy (`C`) as an addition of the new path.
 
 Whitespace-only hunks are kept (they still change lines) but the unit is tagged `whitespace-only` if `git diff -w` produces no hunk for it.
 
@@ -147,7 +149,7 @@ Limitation: git diffs are line-based, so two symbols that share a line (a minifi
 - If the unit's new-side span is ≤ `--full-fn-max` lines, **or at least a third of its lines (old + new) changed**: emit the **whole function with changes marked** — i.e. `git diff -U<big> <range> -- <path>` clipped to `[start, end]`, so unchanged lines appear as context and changed lines carry `+`/`-`.
 - Otherwise: emit the raw hunk(s) intersecting the unit, with 6 lines of context.
 - Deleted units: the old-side body, all lines prefixed `-`.
-- `other` units: the raw hunk at `-U3`.
+- `other` units: the changed lines with 6 lines of context sliced from the file contents (not git's own context), restricted to the unit's own lines.
 
 ### 6.5 Callers
 
@@ -203,7 +205,7 @@ The fact table the agent and the lint both read. One record per unit:
 
 Superseded by §6.2a, which lists every language with rules and how the rule ids and metavariables work; the subsections below describe the first two languages in detail.
 
-Rules are ast-grep YAML files under `rules/<lang>/`, one per kind. Each rule's `id` is the `kind` it reports. The name is captured from the node's `name` field where the grammar has one; for arrow functions it is the enclosing `variable_declarator`'s name.
+Rules are ast-grep YAML files under `rules/<lang>/`: one `units.yml` per language holding one rule per kind (TypeScript adds `units-tsx.yml`). Each rule's `id` is `<lang>-<kind>`, and the kind is what it reports. The name is captured from the node's `name` field where the grammar has one; for arrow functions it is the enclosing `variable_declarator`'s name.
 
 ### 8.1 TypeScript / JavaScript (`typescript`, `tsx`, `javascript`)
 
@@ -236,7 +238,13 @@ Anonymous inner classes and lambdas attribute to the enclosing method.
 
 ### 8.3 Adding a language
 
-Add `rules/<lang>/*.yml` and a line in the language→extension map. No other change. Node-kind names must be verified against the ast-grep version in use during implementation.
+Three steps, all required:
+
+1. Add `rules/<lang>/units.yml` — one rule per unit kind, ids prefixed `<lang>-`.
+2. List the new directory under `ruleDirs` in `sgconfig.yml`. `symbols.ts` runs `ast-grep scan -c sgconfig.yml`, so a directory not listed there is never scanned and the language falls to the whole-file fallback silently.
+3. Add the file extensions to `LANG_BY_EXT` and, if the language has call syntax, `CALLER_LANGS` in `extract.ts`.
+
+Node-kind names must be verified against the ast-grep version in use.
 
 ## 9. Output format
 
@@ -268,7 +276,7 @@ Add `rules/<lang>/*.yml` and a line in the language→extension map. No other ch
 ## [`src/orders/OrderService.java`](src/orders/OrderService.java) — modified
 <!-- rb:file path="…" hash="…" -->
 
-**File Context:** <concise summary: what this file is responsible for — SLOT>
+**File Context:** <concise summary: what this file does and owns, as it now stands — SLOT>
 
 **Changes:** <concise enumeration of the unit updates below and what they accomplish, written from the unit Changes — SLOT>
 
@@ -356,17 +364,19 @@ Three levels, and a fixed order of work.
 **Order of work.** Build upward, and every slot instruction names its step. Step 1: within each file section, the unit slots — every unit's `Context:`/`Changes:`/`Context:` (past tense, deleted unit), every `other` line, unit observations. Step 2: the file's `Changes:` from its unit `Changes:` (what they add up to), its `Context:`, and file-wide observations. Step 3: `Overview:` from every file's `Changes:` and the `Context:` of added files. Each level is a synthesis of the level below, not a guess made before reading it; that order is what makes it accurate. The instructions ask for concise text, never a count, and lint enforces no length.
 
 **Change-set level — the thesis.**
-- `Overview:` — a concise summary of all the changes, built from every file's `Changes:` and the `Context:` of added files: a concise lead line on what the whole change set accomplishes, then, when it has more than one distinct part, a concise bullet per part naming the files that carry it, with no blank line between the lead and the bullets (a blank line ends the slot; lint reports a list left outside it as STRUCTURE). A single-part change set is a short paragraph instead.
+- `Overview:` — a concise summary of all the changes, built from every file's `Changes:` and the `Context:` of added files: a concise lead line on what the whole change set accomplishes, then, when it has more than one distinct part, a concise bullet per part naming the files that carry it, with no blank line between the lead and the bullets. A single-part change set is a short paragraph instead.
+
+**Bullets in any slot.** Every labelled slot may be a lead line followed by bullets, and the same shape rule applies everywhere: the list starts on the line directly after the label line, with no blank line anywhere in the slot. A blank line ends the slot; the parser ignores what follows and the next regeneration drops it. Lint reports a list stranded after a blank line under any label, so the text is never lost silently.
 
 **File level — the map. Intent is allowed here.**
-- `File Context:` — concise summary. What the file is responsible for, as it now stands.
+- `File Context:` — concise summary. What the file does and owns, as it now stands.
 - `Changes:` — from the unit `Changes:` below: a concise enumeration, in sentences or concise bullets, of the unit updates and what they **add up to**; a file with one unit gets a concise summary of what it adds up to, not a restatement. Must name every unit in the section (lint checks). This is where "why" lives.
 - Added files: no `Changes:` slot. `Context:` carries the intent ("what it is for, who uses it"); each new unit's `Context:` carries the intended use of that function.
 
 **Function level — the territory. Checkable against the hunk.**
 - `<Kind> Context:` (`Function Context:`, `Method Context:`, `Class Context:`, `Section Context:`, … from the unit's kind) — concise summary. The function as it now stands, for someone who has forgotten it exists. Present tense: what it does (a callable), says (a document section), or defines (anything else). May reference the generated callers line ("used by the controller and the batch importer to …").
 - `Review Observations:` — optional, concise, under every unit and file (at file level, file-wide only: anything about one unit goes under that unit). Concrete, checkable things a reviewer should look at: unreachable or redundant code, unused leftovers, a missing case, behaviour the description does not explain, a consequence the change accepts (something no longer checked, a caller that must change). Omitted (line deleted) when there is nothing; never "none". Keeps `Context:`/`Changes:` purely descriptive. The agent may be reviewing its own code here, so it complements rather than replaces `/code-review`.
-- `Changes:` — a concise summary, or a concise bullet per change when there is more than one (a list starts on the line after the label; extract and lint put it there). What the function now does that it did not, or no longer does (for a document section or doc unit: what it now says that it did not, or no longer says; for a non-callable unit such as a type, field, key or rule: what it now defines that it did not, or no longer defines) — stated first, in terms the reviewer can verify by reading the hunk below. Name signature changes explicitly. A trailing clause on what the change is meant to accomplish is allowed *after* the behavioral description, never instead of it. If the intent and the code disagree, describe the code and say so.
+- `Changes:` — a concise summary, or a concise bullet per change when there is more than one (a list starts on the line after the label with no blank line; extract and lint put it there). What the function now does that it did not, or no longer does (for a document section or doc unit: what it now says that it did not, or no longer says; for a non-callable unit such as a type, field, key or rule: what it now defines that it did not, or no longer defines) — stated first, in terms the reviewer can verify by reading the hunk below. Name signature changes explicitly. A trailing clause on what the change is meant to accomplish is allowed *after* the behavioral description, never instead of it. If the intent and the code disagree, describe the code and say so.
 - `<Kind> Context:` (past tense, deleted unit) — concise summary. What the deleted function used to do; if the agent can see what replaced it, name the replacement.
 - Write from the code, not from memory of intent. If the code and the intent disagree, describe the code.
 - **Concise and plain.** Declarative sentences; no preamble, hedging, or filler; never restate the heading ("This function…", "is responsible for"). The skeleton carries this as a `**Style:**` line above the first slot, and lint reports `STYLE` for a short list of filler and heading-restating phrases.
@@ -456,7 +466,19 @@ A repository briefed by an earlier version is migrated on the next run: `.git/re
 
 Carry-over sources, in priority: the brief on disk (if same mode), the key's `last.md`, the pre-key per-mode archives, then `cache.json`; a source whose slots are still tokens (a skeleton regenerated before it was filled) is skipped. A unit whose body hash matches any source takes that source's prose. Consequences: switching `wip` ↔ `branch` costs nothing for units already described in either; reverting code to a previously described state costs nothing; file-level `Changes:` and `Notes:` come only from the primary source (they depend on which units are in the range), `Context:` from any.
 
-Other implementation facts: overloads (two symbols with the same scope, name and kind on either side of the diff) carry their parameter list in the unit id, `Svc.save(Order o, boolean force)`, so each overload is its own unit; a container-only unit is hashed on its own changed lines only, so editing a member does not invalidate the container's prose; TS overload and `declare` signatures and abstract methods are units of their own; in working-tree modes (wip, branch, all, raw without `--staged`) untracked files are briefed as additions, `.gitignore` respected, unless `--no-untracked` is given; their since-last hunk is never available because `git stash create` cannot snapshot them; slot instructions never contain `>` (`›` is substituted) so `<<rb:… | …>>` is always delimited by the first `>>`; `other` units are bullets under `**Other changes:**` with their marker on the preceding line and their one-line slot after ` — `; a unit's `signature` is its whole declaration (annotation-only lines dropped, continuation lines joined) cut at the first `{`, `=>`, or `;`, so a changed parameter on a wrapped line is a signature change; comment lines directly above a declaration belong to it, not to the enclosing type; a type is *container-only* when its members are units in the same brief, whatever its kind; all import hunks of a file form one `path#(imports)` unit; the summary block is a blockquote of bullets (Base → Head, Files/Units, Commit, Signature changes, Renamed, Since last brief) followed by folded `<details>` blocks for a commit message longer than three lines and for the agent instructions (the read-these file list and the style line), so a reader sees one fact per line and the agent-only text stays collapsed on GitHub and in the viewer.
+Other implementation facts:
+
+- Overloads (two symbols with the same scope, name and kind on either side of the diff) carry their parameter list in the unit id, `Svc.save(Order o, boolean force)`, so each overload is its own unit.
+- A container-only unit is hashed on its own changed lines only, so editing a member does not invalidate the container's prose.
+- TS overload and `declare` signatures and abstract methods are units of their own.
+- In working-tree modes (wip, branch, all, raw without `--staged`) untracked files are briefed as additions, `.gitignore` respected, unless `--no-untracked` is given. Their since-last hunk is never available because `git stash create` cannot snapshot them.
+- Slot instructions never contain `>` (`›` is substituted), so `<<rb:… | …>>` is always delimited by the first `>>`.
+- `other` units are bullets under `**Other changes:**` with their marker on the preceding line and their one-line slot after ` — `.
+- A unit's `signature` is its whole declaration (annotation-only lines dropped, continuation lines joined) cut at the first `{`, `=>`, or `;`, so a changed parameter on a wrapped line is a signature change.
+- Comment lines directly above a declaration belong to it, not to the enclosing type.
+- A type is *container-only* when its members are units in the same brief, whatever its kind.
+- All import hunks of a file form one `path#(imports)` unit.
+- The summary block is a blockquote of bullets (Base → Head, Files/Units, Commit, Signature changes, Renamed, Since last brief) followed by folded `<details>` blocks for a commit message longer than three lines and for the agent instructions (the read-these file list and the style line), so a reader sees one fact per line and the agent-only text stays collapsed on GitHub and in the viewer.
 
 `SKILL.md` instructs the agent to: run extract (stop and relay verbatim on exit 2 — §4a) → read skeleton and the changed files → fill every file section (files in order, units in order) → write `Overview:` last → run lint → repeat until clean → print the path and the top summary block. The agent never generates headings, dividers, or hunks itself.
 
@@ -496,9 +518,11 @@ previous:                 # from the brief this one was built from, or null
 **Per-section markers**, HTML comments immediately under each file and unit heading. Invisible when rendered; parsed by extract and checked by lint.
 
 ```html
-<!-- rb:file path=src/orders/OrderService.java hash=<sha256 of new-side file content> -->
-<!-- rb:unit id=src/orders/OrderService.java#OrderService.save kind=method status=modified hash=<sha256 of new-side unit body> -->
+<!-- rb:file path="src/orders/OrderService.java" hash="<sha256 prefix of new-side file content>" -->
+<!-- rb:unit id="src/orders/OrderService.java#OrderService.save" kind="method" status="modified" hash="<sha256 prefix of new-side unit body>" -->
 ```
+
+The quotes are mandatory: extract writes every attribute as `name="value"`, and both parsers (`brief-format.ts` for extract and lint, the viewer's `brief.js`) match only that form. A marker with unquoted values parses to no attributes and lint reports `STRUCTURE`.
 
 For deleted units the hash is of the old-side body. For `other` units the hash is of the hunk text. `id` is `path#scope.name`; for `other` units `path#(imports)` etc., disambiguated by the first line number if a file has several.
 
@@ -631,7 +655,7 @@ The loop is: run lint → do exactly what each line says → run lint. Nothing e
 
 - All state is in files. If the agent's context is summarized or the session restarts mid-brief, `lint` lists the remaining empty slots and work continues; nothing is lost.
 - The agent fills slots by **editing the skeleton in place**, one slot per edit, using the unique token as the match string. It never rewrites the whole file, so a 40-file brief does not have to fit in one output.
-- Extract can print one file section (`extract --section <path>`) after writing the whole brief, for an agent that wants to work file by file; SKILL.md does not use it by default — Step 1 relays the output of `--list`, `--check` and `--section` and stops.
+- Extract can print one file section as it would be written (`extract --section <path>`), for an agent that wants to work file by file. Like `--list` and `--check` it is read-only: it writes no brief, no state and no snapshot ref. SKILL.md does not use it by default — Step 1 relays the output of `--list`, `--check` and `--section` and stops.
 
 ### 16.5 Triggering
 
@@ -640,6 +664,14 @@ The skill description is precise about when it applies (*"produce or update a PR
 ### 16.6 Test
 
 A fixture repository with a known branch, a golden `units.json`, and a golden lint result. The eval runs `/pr-brief branch` end to end and passes when: preflight passes, extract's unit table equals the golden, the agent reaches lint-clean without asking a question or running any command not in SKILL.md, and a second run on the unchanged fixture writes zero new prose. A second fixture with three added and three modified files checks that exactly those units are re-narrated.
+
+## 17. Open questions
+
+1. ~~Default threshold~~ — decided 2026-09-06: 150 lines or one-third changed (deleted units always show their whole old body).
+2. Should `field` (Java) and `type`/`interface` (TS) entries get `Context:` slots, or just the hunk? Default: `Context:` slot, concise.
+3. ~~Trivial accessors (getters/setters) as full units~~ — decided 2026-09-06: they stay ordinary units with a `Context:` slot; no tagging or folding. Reason: the unit layer is language-agnostic — the ast-grep rules say what a symbol is, and every symbol is treated the same; an accessor detector would be a per-language shape heuristic inside extraction. (Also, a constant-returning override that looks like a getter is exactly what a reviewer wants described.)
+4. ~~Untracked files in the working-tree case~~ — resolved 2026-09-06: included by default, `--no-untracked` excludes them.
+5. Runtime for the scripts: Node/TypeScript (matches your stack) vs Bash+jq. Default: TypeScript, run with `node` or `bun`.
 
 ## 18. Viewer (brief mode in xor)
 
@@ -654,23 +686,25 @@ The skill bundles xor, the editor (`viewer/`, developed in place; there is no ot
 | `GET /brief` | current file content |
 | `GET /brief/meta` | `{ path, name, mtime, viewer }` — `viewer` is the served app's build id; the editor reloads itself when it changes |
 | `GET /events` | server-sent events: a `meta` frame (same JSON) on connect and whenever the brief file is rewritten, `/switch` changes the served brief, or `sw.js` is re-stamped. Open tabs hold one connection each and never poll; a dropped connection reconnects and gets the current meta again |
-| `PUT /brief` | replaces the file; refused (422) unless the body starts with `pr-brief:` front matter |
+| `PUT /brief` | replaces the file; refused (422) unless the body starts with `pr-brief:` front matter; needs the token (below) when the request carries no `Origin` |
 | `GET /file?path=&brief=` | a repository file as that brief sees it (the commit in commit mode, else the working tree, falling back to head then base), with its `symbols` for the outline; `brief` names the served brief (its commit, its repository), default the current one |
 | `GET /briefs` | every served brief: `{ slug, url, path, name, mtime, repo, root }`; a stored brief's slug is its key, `root` the worktree it was generated from |
 | `GET /briefs/<slug>`, `PUT /briefs/<slug>`, `GET /briefs/<slug>/meta` | one served brief, as `/brief` and `/brief/meta` are for the current one; the `meta` frame carries `current` and the `briefs` list |
-| `POST /switch` | `{ path, root }` — add a brief (or find it) and make it current; localhost only |
-| `POST /stop` | exit; localhost only |
+| `POST /switch` | `{ path, root }` — add a brief (or find it) and make it current; token required |
+| `POST /stop` | exit; token required |
+
+**Trust.** The server answers to localhost only (a foreign `Host` gets 421, a `POST`/`PUT` with a foreign `Origin` gets 403), and its writing routes trust two parties. One is a tab of the editor, identified by a same-origin `Origin` header on its `PUT`. The other is this user's own processes — a second `viewer.ts` handing over a brief, `--stop`, a script saving a brief — which prove themselves with a per-process token: on start the server writes a random token to `<os.tmpdir()>/pr-brief-viewer-<port>.token` (mode 0600, removed on exit), and a client reads that file and sends the value in an `X-Viewer-Token` header. `POST /switch` and `POST /stop` always require the token; `PUT` requires it when the request carries no `Origin`. Any other local process — another user on a shared host — gets 403. `--stop` says so when it finds no token file for the port, since that server was not started by this user.
 
 The editor opens `?brief=` as a **remote document** (`{ remote: url, mtime }`): `:w` PUTs, `:rel` GETs. A brief opened from disk through the File System Access API (drag, ⌘O, OS "open with") behaves the same through its handle. The file on disk is the only truth; the editor's IndexedDB copy is a cache.
 
 ### 18.2 Two writers, one file
 
-The agent rewrites the brief on every extract run; the reviewer edits it in the editor. Before writing, the editor compares the file's current `mtime` with the one recorded when it last read the file and **refuses to save** if they differ ("changed on disk — `:rel` first"). Reload discards unsaved editor changes, as `:e!` would; the reviewer's *saved* notes are safe because extract carries `**Notes:**` over by unit id (§15.4).
+The agent rewrites the brief on every extract run; the reviewer edits it in the editor. Before writing, the editor compares the file's current `mtime` with the one recorded when it last read the file and **refuses to save** if they differ. The toast reads "*name* changed on disk. Reload (:rel) to see the new version; your unsaved edits will be kept in a separate document." and offers a Reload action. Reload never drops unsaved edits: when the editor text differs from the file, it first saves that text as a browser-only document named `<name> (your edits).md` (IndexedDB, not on disk), then replaces the editor content with the file. The reviewer's *saved* notes are safe regardless, because extract carries `**Notes:**` over by unit id (§15.4).
 
 ### 18.3 What brief mode adds
 
 - **Outline** (sidebar): files → units, each with one word, its status (new / modified / deleted / other); the word is highlighted as a pill on units the most recent set of changes touched (`changed since last` in the brief text); click to jump; `changed` filter shows only those.
-- **Motions and commands**: `]u` / `[u` next/previous unit (honouring the filter); `:unit <name>` / `:file <path>` (no argument → picker); `:note` puts the cursor on the unit's `**Notes:**` line in insert mode, creating the line after the unit's hunk if absent; `:changed` toggles the filter; `:rel` reloads.
+- **Motions and commands**: `]u` / `[u` next/previous unit (honouring the filter); `:unit <name>` / `:file <path>` (no argument → picker); `:note` puts the cursor on the unit's `**Notes:**` line in insert mode, creating the line after the unit's hunk if absent; `:copy` copies the unit as a PR comment (below); `:changed` toggles the filter; `:rel` reloads.
 - **Folded hunks**: every ```` ```diff ```` fence is folded on open in the editor (`zR`/`zM` as usual) and rendered as a collapsed `<details>` in the preview, so prose reads first.
 - **Status**: `unit i/n · k changed`.
 - **Copy as PR comment**: `:copy` (palette: *Brief: copy this unit as a PR comment*) or the copy icon on a unit heading in the preview writes the unit to the clipboard as Markdown and as HTML (one `ClipboardItem`, so a rich comment box keeps links and emphasis): the location line — `path:start-end`, linked to `<repo>/blob/<head>/<path>#Lstart-Lend` when the brief is in commit mode or the worktree is clean and the server found an origin remote — then the reviewer's `Notes:` with Context and Changes folded in a `<details>` under them, or Context and Changes unfolded when there are no Notes. `GET /brief/meta` and the `meta` event carry `repo` (the origin remote as a web URL, or null).
@@ -682,11 +716,3 @@ The agent rewrites the brief on every extract run; the reviewer edits it in the 
 ### 18.4 What the editor relies on (format contract)
 
 Only these, all already required by §9 and §15: the front-matter gate line; `## \`path\` — status` file headings (the path may be wrapped in a Markdown link) followed by an `rb:file` marker; `### …` unit headings followed by an `rb:unit` marker (bullet units: marker then `- ` line); badge text `changed since last` in the heading or bullet; `**File Context:**` / `**<Kind> Context:**`, `**Changes:**`, `**Notes:**` as labelled slots; hunks as fenced `diff` blocks (fence length ≥ 3); relative links for paths. Nothing else in the brief is interpreted.
-
-## 17. Open questions
-
-1. ~~Default threshold~~ — decided 2026-09-06: 150 lines or one-third changed (deleted units always show their whole old body).
-2. Should `field` (Java) and `type`/`interface` (TS) entries get `Context:` slots, or just the hunk? Default: `Context:` slot, concise.
-4. ~~Trivial accessors (getters/setters) as full units~~ — decided 2026-09-06: they stay ordinary units with a `Context:` slot; no tagging or folding. Reason: the unit layer is language-agnostic — the ast-grep rules say what a symbol is, and every symbol is treated the same; an accessor detector would be a per-language shape heuristic inside extraction. (Also, a constant-returning override that looks like a getter is exactly what a reviewer wants described.)
-3. ~~Untracked files in the working-tree case~~ — resolved 2026-09-06: included by default, `--no-untracked` excludes them.
-4. Runtime for the scripts: Node/TypeScript (matches your stack) vs Bash+jq. Default: TypeScript, run with `node` or `bun`.

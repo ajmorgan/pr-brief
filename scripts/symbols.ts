@@ -19,6 +19,7 @@ export function findAstGrep(): string | null {
 
 export interface Sym {
   name: string; kind: string; scope: string; start: number; end: number;
+  declLine: number; // the declaration's own first line: `start` may sit above it, on the comment the span includes
   signature: string; text: string;
   bs: number; be: number; // byte offsets of the declaration: nesting is decided on these, so same-line symbols nest correctly
   col: number; // start column, to tell two symbols on one line apart
@@ -55,7 +56,7 @@ export function scanSymbols(sg: string, dir: string): Map<string, Sym[]> {
       if (kind === "key") name = name.replace(/^["']|["']$/g, "");
       let signature = signatureOf(m.text, kind);
       if (kind === "const") { const kw = (content[m.range.start.line] ?? "").match(/^\s*(?:export\s+)?(let|var)\b/)?.[1]; if (kw) signature = `${kw} ${signature}`; }
-      const sym: Sym = { name, kind, scope: "", start, end, bs: m.range.byteOffset.start, be: m.range.byteOffset.end, col: m.range.start.column, signature, text: m.text };
+      const sym: Sym = { name, kind, scope: "", start, end, declLine: m.range.start.line + 1, bs: m.range.byteOffset.start, be: m.range.byteOffset.end, col: m.range.start.column, signature, text: m.text };
       // a rule may name the scope itself (a Go method's receiver type) instead of relying on nesting
       const explicit = m.metaVariables?.single?.SCOPE?.text;
       if (explicit) sym.scope = explicit.replace(/^\*/, "").trim();

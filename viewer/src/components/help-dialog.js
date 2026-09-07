@@ -50,6 +50,7 @@ const shortcuts = [
     [':unit name', 'Jump to a unit by name (no name → pick from a list)'],
     [':file path', 'Jump to a file section'],
     [':note', 'Add or edit the reviewer note for the unit under the cursor'],
+    [':copy', 'Copy the unit under the cursor as a PR comment (Markdown and HTML)'],
     [':changed', 'Toggle showing only units changed since the last brief'],
     [':rel', 'Reload the brief from disk (after the agent regenerated it)'],
     ['zR / zM', 'Unfold / fold all hunks'],

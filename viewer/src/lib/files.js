@@ -59,11 +59,6 @@ export async function openFiles() {
 
 const ACCEPT_EXTENSIONS = Object.values(TEXT_TYPES[0].accept).flat().join(',');
 
-/** Read dropped/launched File objects. */
-export async function readFileObjects(files) {
-  return Promise.all([...files].map(async (f) => ({ name: f.name, content: await f.text(), handle: null, mtime: f.lastModified })));
-}
-
 /** Re-read a linked file from disk. */
 export async function readHandle(handle) {
   const file = await handle.getFile();
@@ -97,7 +92,7 @@ export async function putRemote(url, content, mtime = null) {
   const headers = { 'Content-Type': 'text/markdown; charset=utf-8' };
   if (typeof mtime === 'number') headers['X-Brief-Mtime'] = String(mtime);
   const res = await fetch(url, { method: 'PUT', body: content, headers });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) { const err = new Error(await res.text()); err.status = res.status; throw err; } // 412: the file moved on
   return (await res.json()).mtime;
 }
 

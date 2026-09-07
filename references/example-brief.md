@@ -31,11 +31,14 @@ previous:
 > - `src/util/fresh.ts`
 > - `src/util/parse.ts`
 > 
-> **Style:** concise and plain. Declarative sentences; no preamble, hedging, or filler; never restate the heading ("This function…"). Word budgets are ceilings, not targets — most slots need one sentence.
+> **Style:** concise and plain. Declarative sentences; no preamble, hedging, or filler; never restate the heading ("This function…"). Build upward, and every slot names its step: step 1 the unit slots of a file, step 2 that file's Context, Changes and observations from its units, step 3 the Overview from every file.
 > 
 > </details>
 
-**Overview:** Hardens config loading and tightens order persistence. `src/util/parse.ts` carries most of it: `parseConfig` fails fast on a missing file, `normalize` case-folds names, `Loader` gains `size`, `Config` gains an optional `level`, `configPath` exposes the default path, and `DEFAULT_PATH` changes to `app.yml`; `config/app.yaml` moves its `demo` document to level 2 and `src/util/callers.ts` adds a `shutdown` hook. `src/orders/OrderService.java` makes `save` validate before writing and return a boolean, removes the unvalidated `legacySave`, and wires a `clock` for later use. `src/util/fresh.ts` and `src/util/extra.ts` are new placeholder modules with no callers, and `src/util/old.ts` is deleted. Two things a reviewer may want to check: `DEFAULT_PATH` now names `app.yml` while the file is `app.yaml`, and `shutdown` clears a new `Loader` rather than the one `boot` used.
+**Overview:** Hardens config loading and tightens order persistence.
+- Config loading (`src/util/parse.ts`, `config/app.yaml`, `src/util/callers.ts`): `parseConfig` fails fast on a missing file, `normalize` case-folds names, `Loader` gains `size`, `Config` gains an optional `level`, `configPath` exposes the default path, `DEFAULT_PATH` changes to `config/app.yml`; the `demo` document moves to level 2; `callers.ts` adds a `shutdown` function.
+- Order persistence (`src/orders/OrderService.java`): `save` validates before writing and returns a boolean, the unvalidated `legacySave` is removed, and the constructor sets a new `clock` field.
+- Module housekeeping: `src/util/fresh.ts` and `src/util/extra.ts` are new one-function modules with no callers; `src/util/old.ts` and its `gone` helper are deleted.
 
 ---
 
@@ -66,7 +69,7 @@ previous:
 
 **File Context:** Persists and retrieves orders through a `Repo`. It is the single write path for orders.
 
-**Changes:** Adds validation before persisting and removes the unvalidated path. `save` now calls a new private `validate` and returns a boolean; `legacySave` is deleted. The `OrderService` constructor also initialises a new `clock` field, which nothing reads yet.
+**Changes:** Adds validation before persisting and removes the unvalidated path. `save` now calls a new private `validate` and returns a boolean; `legacySave` is deleted. The `OrderService` constructor also initialises a new `clock` field.
 
 **Other changes:**
 <!-- rb:unit id="src/orders/OrderService.java#(imports)" kind="other" status="modified" hash="913dd4a15b2d4fb8" -->
@@ -88,7 +91,9 @@ previous:
 ### `Clock clock` — new field · [`src/orders/OrderService.java:8-8`](src/orders/OrderService.java#L8)
 <!-- rb:unit id="src/orders/OrderService.java#OrderService.clock" kind="field" status="new" hash="302e9d5c6a79ca88" -->
 
-**Field Context:** Holds a `Clock`, set to system UTC in the constructor; no method reads it yet.
+**Field Context:** Holds a `Clock`, set to system UTC in the constructor.
+
+**Review Observations:** No method reads `clock`; it is assigned and never used.
 
 ```diff
 +    private final Clock clock;
@@ -110,8 +115,6 @@ previous:
      }
 ```
 
-**Notes:** callers must handle the boolean now
-
 ### `boolean save(Order o)` — modified · [`src/orders/OrderService.java:15-19`](src/orders/OrderService.java#L15)
 <!-- rb:unit id="src/orders/OrderService.java#OrderService.save" kind="method" status="modified" hash="89af824f51aa52cf" -->
 
@@ -121,6 +124,8 @@ previous:
 
 **Changes:** Signature changed from `public void save(Order o)` to `public boolean save(Order o)`. Now calls `validate(o)` before `repo.put` and returns the constant `true`; previously it only did the put. Meant to reject orders with a null id before they reach storage.
 
+**Review Observations:** The return value is always `true`, so callers cannot learn anything from it; rejection surfaces only as the exception `validate` throws.
+
 ```diff
 -    public void save(Order o) {
 +    public boolean save(Order o) {
@@ -129,6 +134,8 @@ previous:
 +        return true;
      }
 ```
+
+**Notes:** callers must handle the boolean now
 
 ### `void legacySave(Order o)` — deleted · was `src/orders/OrderService.java:20-22`
 <!-- rb:unit id="src/orders/OrderService.java#OrderService.legacySave" kind="method" status="deleted" hash="2eec558539c86c80" -->
@@ -161,12 +168,14 @@ previous:
 
 **File Context:** Entry points that drive the config loader: `boot` warms it and `shutdown` clears it.
 
-**Changes:** Adds a `shutdown` function so a loader cache can be cleared at exit. Note it clears a newly constructed `Loader`, not the instance `boot` created.
+**Changes:** Adds a `shutdown` function that constructs a `Loader` and clears it, meant to empty a loader cache at exit.
 
 ### `shutdown()` — new · [`src/util/callers.ts:9-11`](src/util/callers.ts#L9)
 <!-- rb:unit id="src/util/callers.ts#shutdown" kind="function" status="new" hash="f29ff52441265a4b" -->
 
-**Function Context:** Constructs a new `Loader` and calls `clear()` on it. Because the instance is fresh, its cache is already empty; the loader used by `boot` is untouched.
+**Function Context:** Constructs a new `Loader` and calls `clear()` on it.
+
+**Review Observations:** The `Loader` it clears is freshly constructed, so its cache is already empty; the loader `boot` created is untouched, and the function has no effect.
 
 ```diff
 +export function shutdown(): void {
@@ -239,7 +248,11 @@ previous:
 
 **File Context:** Reads and normalises the app config file, caches parsed configs per path via `Loader`, and defines the `Config` shape.
 
-**Changes:** Hardens loading and exposes more of the loader. `parseConfig` fails fast with a clear error when the file is missing; `normalize` lower-cases the name; `Loader` gains a `size` method; `Config` gains an optional `level`; a new `configPath` returns the default path; `DEFAULT_PATH` is renamed to `app.yml`, and the `fs` import gains `existsSync`.
+**Changes:** Hardens loading and exposes more of the loader.
+- `parseConfig` throws a `config not found` error when the file is missing, and the `fs` import gains `existsSync` for the check.
+- `normalize` lower-cases the name as well as trimming it.
+- `Loader` gains a `size` method; `Config` gains an optional `level`; a new `configPath` returns the default path.
+- `DEFAULT_PATH` changes from `config/app.yaml` to `config/app.yml`.
 
 **Other changes:**
 <!-- rb:unit id="src/util/parse.ts#(imports)" kind="other" status="modified" hash="2bd887450024cf9f" -->
@@ -261,7 +274,9 @@ previous:
 
 **Const Context:** The default config location, `config/app.yml`.
 
-**Changes:** Value changed from `config/app.yaml` to `config/app.yml`; the file in the repo is still `app.yaml`.
+**Changes:** Value changed from `config/app.yaml` to `config/app.yml`.
+
+**Review Observations:** The file in the repository is still `config/app.yaml`, so `parseConfig(configPath())` now throws `config not found`.
 
 ```diff
 -export const DEFAULT_PATH = "config/app.yaml";

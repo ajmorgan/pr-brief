@@ -101,6 +101,14 @@ export function parseFrontMatter(lines: string[]): { front: Record<string, any>;
   return { front, end: i + 1 };
 }
 
+// Bold lines extract writes that are not slots but still end one.
+const OTHER_LABEL = /^\*\*(Callers|References) \(by name\):\*\*|^\*\*Other changes:\*\*/;
+// A line that starts a slot or another of extract's labels: only these end a slot value. A
+// continuation line that merely begins in bold (`**Important:** …`) is part of the value.
+export function isLabelLine(l: string): boolean {
+  return l.startsWith("**") && (slotLabel(l) !== null || OTHER_LABEL.test(l));
+}
+
 // Read a slot value: rest of the label line plus following lines until a blank
 // line or a structural line.
 function readSlot(lines: string[], i: number, label: string): { value: string; next: number } {
@@ -108,7 +116,7 @@ function readSlot(lines: string[], i: number, label: string): { value: string; n
   let j = i + 1;
   for (; j < lines.length; j++) {
     const l = lines[j];
-    if (l.trim() === "" || l.startsWith("<!--") || l.startsWith("```") || l.startsWith("**") || l.startsWith("#") || l === "---") break;
+    if (l.trim() === "" || l.startsWith("<!--") || l.startsWith("```") || isLabelLine(l) || l.startsWith("#") || l === "---") break;
     parts.push(l);
   }
   return { value: parts.join("\n").trim(), next: j };
@@ -133,7 +141,7 @@ export function isToken(v: string | undefined): boolean {
 
 
 export function parseBrief(text: string): ParsedBrief {
-  const lines = text.split("\n");
+  const lines = text.replace(/\r\n/g, "\n").split("\n"); // a brief saved with CRLF is the same brief
   const { front, end } = parseFrontMatter(lines);
   const brief: ParsedBrief = { front, overview: null, files: [], structure: [], hasRevise: false, tokens: [] };
   let file: ParsedFile | null = null;

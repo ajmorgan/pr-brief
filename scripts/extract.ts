@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // extract.ts — the deterministic half of pr-brief (spec §4a–§9, §15).
 // Computes changed files and units from git + ast-grep, carries prose over
-// from the previous brief, and writes PR_BRIEF.md as a skeleton with
-// slot tokens for the agent to fill. Never calls a model.
+// from the previous brief, and writes the brief (<git dir>/pr-brief/<key>/pr-brief-<key>.md,
+// or --out) as a skeleton with slot tokens for the agent to fill. Never calls a model.
 //
 // Exit codes: 0 ok · 1 usage/runtime error · 2 preflight failure (missing tool)
 
@@ -17,7 +17,7 @@ import { SKILL_DIR, scanSymbols as scanSymbolsOrThrow, signatureOf, symKey, qual
 import type { Sym } from "./symbols.ts";
 
 const SG_MIN = [0, 30, 0];
-const NODE_MIN = 22;
+const NODE_MIN = [22, 18]; // unflagged type stripping; an older node fails to load this .ts file before the check can run
 const CALLER_CAP = 20;
 const TYPE_KINDS = new Set(["class", "interface", "enum", "record", "annotation", "type", "object"]);
 const DEFAULT_BASE = "origin/main";
@@ -36,6 +36,7 @@ interface Unit {
   status: "new" | "modified" | "deleted";
   oldSpan: [number, number] | null; newSpan: [number, number] | null;
   signature: string; oldSignature: string | null; display: string;
+  declLine?: number; // the declaration line on the new side (the span may start above it, on its comment)
   newLines: Set<number>; oldLines: Set<number>;
   hunk: string; callers: { total: number; sites: string[]; note?: string } | null;
   tags: string[]; hash: string; badge: string; renamedFrom: string | null; col: number;
@@ -117,20 +118,22 @@ function parseArgs(argv: string[]): Args {
   const a: Args = { mode: "wip", raw: [], base: DEFAULT_BASE, commit: "HEAD", fullFnMax: DEFAULT_FULL_FN_MAX, out: null, key: null, list: false, fresh: false, check: false, section: null, scope: ".", open: false, exclude: [], untracked: true };
   for (let i = 0; i < argv.length; i++) {
     const x = argv[i];
+    // an option's value must be there and must not be another option: a missing one is a usage error (exit 1), never a silent default
+    const val = (): string => { const v = argv[++i]; if (v === undefined || (v.startsWith("-") && v !== "-")) die(`${x} needs a value\n${USAGE}`); return v; };
     if (x === "--") { a.mode = "raw"; a.raw = argv.slice(i + 1); break; }
     else if (x === "wip" || x === "branch" || x === "all") a.mode = x;
     else if (x === "commit") { a.mode = "commit"; if (argv[i + 1] && !argv[i + 1].startsWith("-")) a.commit = argv[++i]; }
-    else if (x === "--base") a.base = argv[++i];
-    else if (x === "--full-fn-max") a.fullFnMax = parseInt(argv[++i], 10);
-    else if (x === "--out") a.out = argv[++i];
-    else if (x === "--key") a.key = argv[++i];
+    else if (x === "--base") a.base = val();
+    else if (x === "--full-fn-max") { a.fullFnMax = parseInt(val(), 10); if (Number.isNaN(a.fullFnMax) || a.fullFnMax < 0) die(`--full-fn-max needs a non-negative number\n${USAGE}`); }
+    else if (x === "--out") a.out = val();
+    else if (x === "--key") a.key = val();
     else if (x === "--list") a.list = true;
     else if (x === "--fresh") a.fresh = true;
     else if (x === "--check") a.check = true;
-    else if (x === "--section") a.section = argv[++i];
-    else if (x === "--path") a.scope = argv[++i];
+    else if (x === "--section") a.section = val();
+    else if (x === "--path") a.scope = val();
     else if (x === "--open") a.open = true;
-    else if (x === "--exclude") a.exclude.push(argv[++i]);
+    else if (x === "--exclude") a.exclude.push(val());
     else if (x === "--no-untracked") a.untracked = false;
     else if (x === "-h" || x === "--help") { process.stdout.write(USAGE); process.exit(0); }
     else die(`unknown argument: ${x}\n${USAGE}`);
@@ -144,8 +147,8 @@ const USAGE = `usage: extract.ts [wip|branch|all|commit <ref>] [--base <ref>] [-
 // ---------------------------------------------------------------- preflight (§4a)
 
 function preflight(a: Args): { sg: string } {
-  const nodeMajor = parseInt(process.versions.node.split(".")[0], 10);
-  if (nodeMajor < NODE_MIN) die(`pr-brief scripts need node >= ${NODE_MIN} (found ${process.versions.node}).`, 2);
+  const [nodeMajor, nodeMinor] = process.versions.node.split(".").map((x) => parseInt(x, 10));
+  if (nodeMajor < NODE_MIN[0] || (nodeMajor === NODE_MIN[0] && nodeMinor < NODE_MIN[1])) die(`pr-brief scripts need node >= ${NODE_MIN.join(".")} (found ${process.versions.node}).`, 2);
 
   let sg: string | null = null;
   let ver = "";
@@ -215,6 +218,33 @@ function resolveRange(a: Args): RangeInfo {
 
 // ---------------------------------------------------------------- diff parsing (§6.1)
 
+// A path git printed C-quoted (`"src/quo\"te.ts"`): `"`, `\` and control characters are always
+// escaped, whatever core.quotePath says; octal escapes are UTF-8 bytes.
+function unquoteC(s: string): string {
+  if (!s.startsWith('"')) return s;
+  const esc: Record<string, string> = { a: "\x07", b: "\b", t: "\t", n: "\n", v: "\v", f: "\f", r: "\r" };
+  let out = "", bytes: number[] = [];
+  const flush = () => { if (bytes.length) { out += Buffer.from(bytes).toString("utf8"); bytes = []; } };
+  for (let i = 1; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"') break;
+    if (c !== "\\") { flush(); out += c; continue; }
+    const oct = s.slice(i + 1, i + 4);
+    if (/^[0-7]{3}$/.test(oct)) { bytes.push(parseInt(oct, 8)); i += 3; continue; }
+    flush(); out += esc[s[i + 1]] ?? s[i + 1]; i++;
+  }
+  flush();
+  return out;
+}
+// The path a `--- `/`+++ ` header names under our forced a/ b/ prefix, plain or C-quoted; git ends a
+// path containing a space with a tab. null for /dev/null and anything else.
+function headerPath(rest: string, prefix: string): string | null {
+  const s = rest.replace(/\t$/, "");
+  if (s.startsWith(prefix)) return s.slice(prefix.length);
+  if (s.startsWith('"' + prefix)) return unquoteC(s).slice(prefix.length);
+  return null;
+}
+
 function parseUnified(text: string): Map<string, Hunk[]> {
   const out = new Map<string, Hunk[]>();
   let cur: string | null = null;
@@ -222,9 +252,10 @@ function parseUnified(text: string): Map<string, Hunk[]> {
   let o = 0, n = 0;
   for (const line of text.split("\n")) {
     if (line.startsWith("diff --git ")) { cur = null; hunk = null; continue; }
-    // git ends the path with a tab when it contains a space; the a/ b/ prefixes are forced on every diff call
-    if (line.startsWith("--- ")) { if (line.startsWith("--- a/")) cur = line.slice(6).replace(/\t$/, ""); continue; }
-    if (line.startsWith("+++ ")) { if (line.startsWith("+++ b/")) cur = line.slice(6).replace(/\t$/, ""); continue; }
+    // file headers come only between `diff --git` and the first `@@`: inside a hunk a line starting
+    // `--- ` is a deleted `-- ` comment (Lua, SQL, Haskell) and `+++ ` an added `++ ` line
+    if (hunk === null && line.startsWith("--- ")) { const p = headerPath(line.slice(4), "a/"); if (p !== null) cur = p; continue; }
+    if (hunk === null && line.startsWith("+++ ")) { const p = headerPath(line.slice(4), "b/"); if (p !== null) cur = p; continue; }
     if (cur === null) continue;
     const m = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/);
     if (m) {
@@ -307,7 +338,7 @@ function attribute(f: FileEntry, oldSyms: Sym[], newSyms: Sym[]): void {
       oldSpan: old ? [old.start, old.end] : null, newSpan: nw ? [nw.start, nw.end] : null,
       signature: (nw ?? s).signature, oldSignature: old ? old.signature : null, display: displayName((nw ?? s).signature, s.name, s.kind),
       newLines: new Set(), oldLines: new Set(), hunk: "", callers: null, tags: [], hash: sha(nw ? spanText(nw, newLinesArr) : spanText(old ?? s, oldLinesArr)), badge: "", renamedFrom: null, col: (nw ?? s).col,
-      slots: {}, revise: null, notes: null,
+      declLine: nw?.declLine, slots: {}, revise: null, notes: null,
     };
     units.set(key, u);
     return u;
@@ -373,7 +404,7 @@ function attribute(f: FileEntry, oldSyms: Sym[], newSyms: Sym[]): void {
       u.hash = sha(nl.map((l) => newLinesArr[l - 1]).join("\n") + "\n--\n" + ol.map((l) => oldLinesArr[l - 1]).join("\n"));
     }
   }
-  // renames: pair a deleted unit with a new unit of the same kind whose body is ≥75% the same
+  // renames: pair a deleted unit with a new unit of the same kind whose body is at least 90% the same
   // lines (the name line differs); the pair becomes one modified unit, renamed from the old name
   const lineSet = (t: string) => new Set(t.split("\n").map((l) => l.trim()).filter(Boolean));
   const similar = (a: string, b: string) => { const A = lineSet(a), B = lineSet(b); let both = 0; for (const l of A) if (B.has(l)) both++; return both / Math.max(1, Math.max(A.size, B.size)); };
@@ -431,7 +462,7 @@ function noIndexDiff(oldText: string, newText: string): string[] {
   const a = path.join(tmp, "a"), b = path.join(tmp, "b");
   fs.writeFileSync(a, oldText.endsWith("\n") ? oldText : oldText + "\n");
   fs.writeFileSync(b, newText.endsWith("\n") ? newText : newText + "\n");
-  const r = spawnSync("git", ["diff", "--no-index", "--no-color", "-U100000", a, b], { encoding: "utf8" });
+  const r = spawnSync("git", ["diff", "--no-index", "--no-color", "--no-ext-diff", "-U100000", a, b], { encoding: "utf8" }); // a configured diff.external prints no @@ lines
   fs.rmSync(tmp, { recursive: true, force: true });
   const lines = r.stdout.split("\n");
   const at = lines.findIndex((l) => l.startsWith("@@"));
@@ -558,9 +589,13 @@ function findCallers(sg: string, files: FileEntry[], rev: string | null): void {
 // cases honest: a declaration that other files cannot call (not exported in TS/JS, private in Java, Kotlin
 // or TS, unexported in Go) keeps only the sites that could reach it; and a file that declares the same
 // name itself is taken to be calling its own, so its sites are dropped. Both are said on the Callers line.
+// A declaration must look like one, not like a call: a TS/JS method is an indented name whose parameter
+// list is followed by `{` or a return type (`  foo(x);` is a call); a Java method has a type before its
+// name (`if (foo(x)) {` and `return foo(x);` have none). A signature wrapped right after its `(` is not
+// recognised: a bare `  foo(` line is also how a multi-line call starts, and dropping a real caller is the worse error.
 const DECL_RE: Record<string, (n: string) => RegExp> = {
-  typescript: (n) => new RegExp(`^\\s*(export\\s+(default\\s+)?)?(async\\s+)?function\\s*\\*?\\s*${n}\\s*[(<]|^\\s*(export\\s+)?(const|let|var)\\s+${n}\\b|^\\s+(public|private|protected|static|async|readonly|override|\\s)*${n}\\s*\\(`, "m"),
-  java: (n) => new RegExp(`\\b${n}\\s*\\([^;{]*\\)\\s*(throws[^{;]*)?\\{`),
+  typescript: (n) => new RegExp(`^\\s*(export\\s+(default\\s+)?)?(async\\s+)?function\\s*\\*?\\s*${n}\\s*[(<]|^\\s*(export\\s+)?(const|let|var)\\s+${n}\\b|^\\s+((public|private|protected|static|async|readonly|override|abstract|get|set)\\s+)*\\*?\\s*${n}\\s*\\((?:[^()]|\\([^()]*\\))*\\)\\s*[:{]`, "m"), // one nesting level in the parameter list: `on(cb: () => void) {`, `f(x = g(1)) {`
+  java: (n) => new RegExp(`^[^;(){}]*[\\w>\\]]\\s+${n}\\s*\\([^;{]*\\)\\s*(throws[^{;]*)?\\{`, "m"),
   kotlin: (n) => new RegExp(`\\bfun\\s+(<[^>]*>\\s*)?([\\w.]+\\.)?${n}\\s*\\(`),
   go: (n) => new RegExp(`^func\\s+(\\([^)]*\\)\\s*)?${n}\\s*[(\\[]`, "m"),
   python: (n) => new RegExp(`^\\s*(async\\s+)?def\\s+${n}\\s*\\(`, "m"),
@@ -582,7 +617,8 @@ function restrictSites(u: Unit, f: FileEntry, lang: string, raw: Set<string>, re
   const notes: string[] = [];
   let sites = [...raw];
   const fileOf = (s: string) => s.slice(0, s.lastIndexOf(":"));
-  const decl = (f.newContent ?? "").split("\n")[(u.newSpan?.[0] ?? 1) - 1] ?? "";
+  // the declaration's own line: the span starts above it when a comment precedes it, and `export`/`private` are not on the comment
+  const decl = (f.newContent ?? "").split("\n")[(u.declLine ?? u.newSpan?.[0] ?? 1) - 1] ?? "";
   const topLevel = !u.scope;
   const jsLike = lang === "typescript" || lang === "tsx" || lang === "javascript";
   // 1. a declaration other files cannot call
@@ -722,7 +758,8 @@ function main(): void {
   const { key, shown: keyShown } = briefKey(a, R);
   const stateRoot = path.join(GIT_COMMON, STATE_DIR);
   const stateDir = path.join(stateRoot, key); // this brief's own directory: the brief, its fact table, its archive
-  if (!a.list) migrateState(stateRoot, key); // --list is read-only and leaves state alone
+  const readOnly = a.list || a.section !== null; // --list and --section print and write nothing: no state, no brief, no ref
+  if (!readOnly) migrateState(stateRoot, key);
   const outAbs = a.out ? path.resolve(ROOT, a.out) : path.join(stateDir, `pr-brief-${key}.md`);
   const outRel = path.relative(ROOT, outAbs);
   // a brief written into the working tree (--out) is kept out of the diff and of git status; under the git directory it is in neither
@@ -732,19 +769,27 @@ function main(): void {
 
   // changed files
   const files: FileEntry[] = [];
-  for (const line of git(["diff", "-M", "--name-status", ...R.diffArgs, ...excl]).split("\n")) {
-    const m = line.match(/^([AMDR])\d*\t([^\t]+)(?:\t(.+))?$/);
+  // -z: NUL-separated records, so a path holding `"` or `\` arrives unquoted. A rename or copy record
+  // carries two paths (old, new); every other status one.
+  const ns = git(["diff", "-z", "-M", "--name-status", ...R.diffArgs, ...excl]).split("\0");
+  for (let i = 0; i < ns.length; i++) {
+    const m = ns[i].match(/^([A-Z])\d*$/);
     if (!m) continue;
-    const renamed = m[1] === "R";
-    const p = renamed ? m[3] : m[2];
-    files.push({ path: p, status: m[1] as any, renamedFrom: renamed ? m[2] : null, lang: langOf(p), binary: false, oldContent: null, newContent: null, hash: "", units: [], tags: [], hunksU0: [], hunksU3: [], hunksW: [], slots: {}, notes: null, commitsSinceLast: [], revise: null });
+    const two = m[1] === "R" || m[1] === "C";
+    const from = two ? ns[i + 1] : null, p = two ? ns[i + 2] : ns[i + 1];
+    i += two ? 2 : 1;
+    if (!p) continue;
+    // T (a symlink became a regular file, or the reverse) and C (a copy) are a modification and an addition here
+    const status = m[1] === "T" ? "M" : m[1] === "C" ? "A" : m[1];
+    if (status !== "A" && status !== "M" && status !== "D" && status !== "R") continue; // U (unmerged), X: not a change to brief
+    files.push({ path: p, status, renamedFrom: status === "R" ? from : null, lang: langOf(p), binary: false, oldContent: null, newContent: null, hash: "", units: [], tags: [], hunksU0: [], hunksU3: [], hunksW: [], slots: {}, notes: null, commitsSinceLast: [], revise: null });
   }
   // untracked files: git diff never lists them, but an agent's new files are the change being reviewed.
   // Working-tree modes only (an index or commit has no untracked files); .gitignore is respected.
   const untracked = new Set<string>();
   if (R.newSide === "worktree" && a.untracked) {
     const known = new Set(files.map((f) => f.path));
-    for (const p of git(["ls-files", "--others", "--exclude-standard", ...excl]).split("\n")) {
+    for (const p of git(["ls-files", "-z", "--others", "--exclude-standard", ...excl]).split("\0")) {
       if (!p || known.has(p) || p.endsWith("/")) continue; // a trailing slash is a nested repository, not a file
       untracked.add(p);
       files.push({ path: p, status: "A", renamedFrom: null, lang: langOf(p), binary: false, oldContent: null, newContent: null, hash: "", units: [], tags: [], hunksU0: [], hunksU3: [], hunksW: [], slots: {}, notes: null, commitsSinceLast: [], revise: null });
@@ -754,9 +799,9 @@ function main(): void {
 
   // generated files (gitattributes `linguist-generated`, or a minified/lock-file name) get one
   // unit and no hunk: nobody reviews a bundle line by line
-  if (files.length) for (const line of git(["check-attr", "linguist-generated", "--", ...files.map((f) => f.path)]).split("\n")) {
-    const m = line.match(/^(.+): linguist-generated: (.+)$/);
-    if (m && m[2] !== "unspecified" && m[2] !== "false") { const f = files.find((f) => f.path === m[1]); if (f) f.tags.push("generated"); }
+  if (files.length) { // -z: path NUL attribute NUL value NUL, paths never quoted
+    const z = git(["check-attr", "-z", "linguist-generated", "--", ...files.map((f) => f.path)]).split("\0");
+    for (let i = 0; i + 2 < z.length; i += 3) if (z[i + 2] !== "unspecified" && z[i + 2] !== "false") { const f = files.find((f) => f.path === z[i]); if (f) f.tags.push("generated"); }
   }
   for (const f of files) if (!f.tags.includes("generated") && /(\.min\.(js|css)$|(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|go\.sum)$)/.test(f.path)) f.tags.push("generated");
   const PREFIX = ["--src-prefix=a/", "--dst-prefix=b/"]; // the parser keys hunks by these, whatever diff.noprefix/mnemonicPrefix say
@@ -943,8 +988,8 @@ function main(): void {
   // snapshot (§15.1)
   const dirty = git(["status", "--porcelain", "--untracked-files=no", ...excl]).trim() !== "" || untracked.size > 0;
   let snapshot = R.head;
-  if (dirty && R.newSide === "worktree") { const s = git(["stash", "create"], { ok: true }).trim(); if (s) snapshot = s; }
-  git(["update-ref", `refs/pr-brief/${key}`, snapshot]); // keeps this brief's snapshot alive through gc
+  if (dirty && R.newSide === "worktree" && !readOnly) { const s = git(["stash", "create"], { ok: true }).trim(); if (s) snapshot = s; }
+  if (!readOnly) git(["update-ref", `refs/pr-brief/${key}`, snapshot]); // keeps this brief's snapshot alive through gc
 
   // ---- render skeleton (§9)
   const nFiles = { A: 0, M: 0, D: 0, R: 0 }; for (const f of files) nFiles[f.status]++;
@@ -1006,9 +1051,9 @@ function main(): void {
     if (f.binary) { L.push(`Binary file; ${statusWord}. No units.`, ""); continue; }
     // Changes: must name every unit except tests (their titles are long and they are listed just below) and buckets
     const unitNames = f.units.filter((u) => u.kind !== "other" && u.kind !== "file" && u.kind !== "test").map((u) => u.name);
-    L.push(`${labelOf("purpose")} ${f.slots.purpose?.text ?? `<<rb:purpose ${f.path} | step 2, after this file's unit slots: concise summary: what this file is responsible for, as it now stands${f.status === "D" ? " (past tense: it was deleted)" : f.status === "A" ? " — the file is new; say what it is for and who is expected to use it" : ""}>>`}`, "");
+    L.push(`${labelOf("purpose")} ${f.slots.purpose?.text ?? `<<rb:purpose ${f.path} | step 2, after this file's unit slots: concise summary: what this file does and owns, as it now stands${f.status === "D" ? " (past tense: it was deleted)" : f.status === "A" ? " — the file is new; say what it is for and who is expected to use it" : ""}>>`}`, "");
     // an added file has no "before": Purpose only (its units are all new and get Purpose: only)
-    if (f.status !== "A") L.push(`**Changes:** ${f.slots.changes?.text ?? `<<rb:changes ${f.path} | step 2, after every unit slot in this file, from the unit Changes below: a concise enumeration, in sentences or concise bullets, of the unit updates and what they add up to; when the file has one unit, a concise summary of what it adds up to, not a restatement. Must name every unit below${unitNames.length ? ": " + unitNames.join(", ") : ""}>>`}`, "");
+    if (f.status !== "A") L.push(`**Changes:** ${f.slots.changes?.text ?? `<<rb:changes ${f.path} | step 2, after every unit slot in this file, from the unit Changes below: a concise enumeration, in sentences or concise bullets (bullets directly under the label line, no blank line), of the unit updates and what they add up to; when the file has one unit, a concise summary of what it adds up to, not a restatement. Must name every unit below${unitNames.length ? ": " + unitNames.join(", ") : ""}>>`}`, "");
     if (f.slots.review?.text !== "") { const slot = f.slots.review?.text, id = f.path; L.push(`**Review Observations:** ${slot ?? `<<rb:review ${id} | step 2, optional, concise, file-wide only (anything about one unit goes under that unit): ${REVIEW_TAIL}>>`}`, ""); }
     if (f.revise || f.purposeRevise) L.push(`<!-- rb:revise ${f.path}`, [f.purposeRevise, f.revise].filter(Boolean).join("\n"), "-->", "");
     if (f.notes) L.push(`**Notes:** ${f.notes}`, "");
@@ -1030,6 +1075,7 @@ function main(): void {
         L.push(`- ${loc} ${label}${u.badge ? ` · ${u.badge}` : ""} — ${otherText}`);
         if (u.revise) L.push(`<!-- rb:revise ${u.id}`, u.revise, "-->");
         L.push(...fence(u.hunk), "");
+        if (u.notes) L.push(`**Notes:** ${u.notes}`, ""); // where the viewer puts a note on a bullet unit: after its fence
         slotIndex.push({ scope: "unit", id: u.id, kind: u.kind, slots: u.slots, notes: u.notes });
       }
     }
@@ -1058,7 +1104,7 @@ function main(): void {
         if (u.status === "modified") {
         const sigNote = u.renamedFrom ? ` Renamed from \`${u.renamedFrom}\` — say so, then describe any other difference.` : u.oldSignature !== null && u.oldSignature !== u.signature ? ` The signature changed — name it: was \`${u.oldSignature}\`.` : "";
           const ws = u.tags.includes("whitespace-only") ? ' If the change is formatting only, write exactly: "formatting only".' : "";
-          L.push(`${labelOf("change")} ${u.slots.change?.text ?? `<<rb:change ${u.id} | step 1: a concise summary, or a concise bullet per change when there is more than one: ${verbs.change} — stated first, checkable against the hunk below.${sigNote} A trailing clause on what the change is meant to accomplish is allowed after the description, never instead of it. If the code and its apparent intent disagree, describe the code and say so.${ws}>>`}`, "");
+          L.push(`${labelOf("change")} ${u.slots.change?.text ?? `<<rb:change ${u.id} | step 1: a concise summary, or a concise bullet per change when there is more than one (bullets directly under the label line, no blank line): ${verbs.change} — stated first, checkable against the hunk below.${sigNote} A trailing clause on what the change is meant to accomplish is allowed after the description, never instead of it. If the code and its apparent intent disagree, describe the code and say so.${ws}>>`}`, "");
         }
       }
       if (u.slots.review?.text !== "") { const slot = u.slots.review?.text, id = u.id; L.push(`**Review Observations:** ${slot ?? `<<rb:review ${id} | step 1, optional, concise: ${REVIEW_TAIL}>>`}`, ""); }
@@ -1073,13 +1119,21 @@ function main(): void {
   // slot instructions must not contain ">" so that `<<rb:… | …>>` is always delimited by the first ">>".
   // Applied outside code fences only — a hunk may legitimately contain that text (this file's own source does).
   let fenceLen = 0;
-  const text0 = L.map((l) => {
+  const lines0 = L.map((l) => {
     const fm = l.match(/^(`{3,})/);
     if (fenceLen === 0 && fm) { fenceLen = fm[1].length; return l; }
     if (fenceLen > 0) { if (fm && fm[1].length >= fenceLen && l.trim() === fm[1]) fenceLen = 0; return l; }
     return l.replace(/<<rb:([^|\n]*)\| ([^\n]*?)>>/g, (_m, id, instr) => `<<rb:${id}| ${instr.replace(/>/g, "›")}>>`);
-  }).join("\n");
-  const text = listOnNextLine(text0); // a carried-over value that is a list keeps its bullets on their own lines
+  });
+  if (a.section) { // read-only: print one file's section exactly as it would be written, touch nothing on disk
+    const heads = [`## \`${a.section}\``, `## [\`${a.section}\`](${a.section})`];
+    const start = lines0.findIndex((l) => heads.some((h) => l === h || l.startsWith(h + " —")));
+    if (start < 0) die(`no section for ${a.section}`);
+    let end = lines0.indexOf("---", start); if (end < 0) end = lines0.length;
+    process.stdout.write(listOnNextLine(lines0.slice(start, end).join("\n")) + "\n");
+    return;
+  }
+  const text = listOnNextLine(lines0.join("\n")); // a carried-over value that is a list keeps its bullets on their own lines
   // state for lint (§14): lives under the git directory so it is never in the diff
   fs.mkdirSync(stateDir, { recursive: true });
   if (fs.existsSync(outAbs)) fs.copyFileSync(outAbs, path.join(stateDir, "previous.md")); // whatever is overwritten stays recoverable
@@ -1101,14 +1155,6 @@ function main(): void {
     if (!exclText.split("\n").includes(outRel)) fs.appendFileSync(exclFile, (exclText.endsWith("\n") || exclText === "" ? "" : "\n") + outRel + "\n");
   }
 
-  if (a.section) {
-    const heads = [`## \`${a.section}\``, `## [\`${a.section}\`](${a.section})`];
-    const start = L.findIndex((l) => heads.some((h) => l === h || l.startsWith(h + " —")));
-    if (start < 0) die(`no section for ${a.section}`);
-    let end = L.indexOf("---", start); if (end < 0) end = L.length;
-    process.stdout.write(L.slice(start, end).join("\n") + "\n");
-    return;
-  }
   if (a.open) { // hand the brief to the vendored editor (scripts/viewer.ts); it outlives this process
     const child = spawn(process.execPath, [path.join(SKILL_DIR, "scripts", "viewer.ts"), "--out", outAbs], { cwd: ROOT, stdio: "ignore", detached: true });
     child.unref();

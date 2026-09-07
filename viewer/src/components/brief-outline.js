@@ -1,7 +1,9 @@
 // <brief-outline>: the sidebar outline — a PR brief's files and units with
 // since-last badges, or (mode "file") one source file's symbols with a badge on
 // those that are units in the brief. Pure view: it renders the model it is given
-// and emits goto-line {line}, filter {changedOnly}, and open-brief {id}.
+// and emits goto-line {line} and open-brief {id}.
+
+import { isChanged } from '../lib/brief.js';
 
 export class BriefOutline extends HTMLElement {
   #brief = null;
@@ -31,6 +33,12 @@ export class BriefOutline extends HTMLElement {
       const el = e.target.closest('[data-line]');
       if (el) this.dispatchEvent(new CustomEvent('goto-line', { detail: { line: Number(el.dataset.line) }, bubbles: true }));
     });
+    // the badge is focusable on its own: Enter or Space opens the brief there, and does not also fire the unit button under it
+    this.#list.addEventListener('keydown', (e) => {
+      if ((e.key !== 'Enter' && e.key !== ' ') || !e.target.matches?.('[data-brief-id]')) return;
+      e.preventDefault(); e.stopPropagation();
+      this.dispatchEvent(new CustomEvent('open-brief', { detail: { id: e.target.dataset.briefId }, bubbles: true }));
+    });
   }
 
   set brief(model) { this.#brief = model; this.#render(); }
@@ -57,20 +65,19 @@ export class BriefOutline extends HTMLElement {
     this.#changedOnly = force ?? !this.#changedOnly;
     this.#filterBtn.setAttribute('aria-pressed', String(this.#changedOnly));
     this.#render();
-    this.dispatchEvent(new CustomEvent('filter', { detail: { changedOnly: this.#changedOnly }, bubbles: true }));
   }
 
   #render() {
     if (!this.#list) return;
     const b = this.#brief;
     if (!b) { this.#list.replaceChildren(); this.#count.textContent = ''; return; }
-    const changed = b.units.filter((u) => u.touched || u.badge).length; // brief: touched units; source file: symbols in the brief
+    const changed = b.units.filter(isChanged).length; // brief: touched units; source file: symbols in the brief
     this.#count.textContent = this.#mode === 'file'
       ? `${b.units.length} symbols` + (changed ? ` · ${changed} in brief` : '')
       : `${b.files.length} files · ${b.units.length} units` + (changed ? ` · ${changed} changed` : '');
     const items = [];
     for (const f of b.files) {
-      const units = this.#changedOnly ? f.units.filter((u) => u.touched || u.badge) : f.units;
+      const units = this.#changedOnly ? f.units.filter(isChanged) : f.units;
       if (this.#changedOnly && !units.length) continue;
       const li = document.createElement('li');
       li.className = 'outline-file';
@@ -88,6 +95,7 @@ export class BriefOutline extends HTMLElement {
       for (const u of units) {
         const uli = document.createElement('li');
         uli.className = 'outline-unit';
+        uli.setAttribute('role', 'treeitem');
         uli.dataset.index = String(u.index);
         const ub = document.createElement('button');
         ub.type = 'button';
@@ -107,7 +115,8 @@ export class BriefOutline extends HTMLElement {
           const badge = document.createElement('span');
           badge.className = `outline-badge outline-badge-${u.badge}`;
           badge.textContent = u.badge;
-          if (u.badge === 'brief') { badge.dataset.briefId = u.id; badge.setAttribute('role', 'button'); badge.title = 'This symbol is a unit in the brief — open it there'; }
+          // a span, not a <button>: it sits inside the unit's button, where a nested button is not allowed
+          if (u.badge === 'brief') { badge.dataset.briefId = u.id; badge.setAttribute('role', 'button'); badge.tabIndex = 0; badge.title = 'This symbol is a unit in the brief — open it there'; }
           ub.append(badge);
         }
         uli.append(ub);
@@ -128,6 +137,7 @@ export class BriefOutline extends HTMLElement {
     for (const li of this.#list.querySelectorAll('.outline-unit')) {
       const on = unit && Number(li.dataset.index) === unit.index;
       li.classList.toggle('active', !!on);
+      if (on) li.setAttribute('aria-current', 'true'); else li.removeAttribute('aria-current');
       if (on) li.scrollIntoView({ block: 'nearest' });
     }
   }
