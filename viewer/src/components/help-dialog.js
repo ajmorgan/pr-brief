@@ -4,7 +4,7 @@ import { modKey } from '../lib/state.js';
 
 const shortcuts = [
   ['General', [
-    [`${modKey} K`, 'Command palette'],
+    [`${modKey} K`, 'Command palette (type to filter: "color" finds the scheme picker)'],
     [`${modKey} N`, 'New document'],
     [`${modKey} O`, 'Open file from disk'],
     [`${modKey} S`, 'Save (writes to disk when the document is linked to a file)'],
@@ -12,12 +12,12 @@ const shortcuts = [
     [`${modKey} B`, 'Toggle file sidebar'],
     [`${modKey} E`, 'Cycle view: editor → split → preview'],
     [`${modKey} ⇧ V`, 'Toggle vim mode'],
-    [`${modKey} ⇧ T`, 'Pick color scheme'],
     [`${modKey} ⇧ Z`, 'Zen mode (hide everything but the text)'],
     [`${modKey} ⇧ F`, 'Switch document'],
     [`${modKey} =`, 'Larger font'],
     [`${modKey} -`, 'Smaller font'],
-    [`${modKey} ?`, 'This help'],
+    [`${modKey} /`, 'This help (inside the editor it toggles a comment: use the palette or :h there)'],
+    ['?', 'This help, when no text field has the focus'],
   ]],
   ['Editing', [
     [`${modKey} F`, 'Find / replace'],

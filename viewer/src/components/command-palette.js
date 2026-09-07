@@ -45,7 +45,9 @@ export class CommandPalette extends HTMLElement {
       const li = e.target.closest('li[data-index]');
       if (li && Number(li.dataset.index) !== this.#index) { this.#index = Number(li.dataset.index); this.#paint(); }
     });
-    this.#dialog.addEventListener('close', () => this.#finish(null));
+    // A command that opens another picker (⌘K → Color scheme…) calls open() again before the queued close
+    // event of the first close() fires; that stale event must not finish the new session.
+    this.#dialog.addEventListener('close', () => { if (!this.#dialog.open) this.#finish(null); });
     this.#dialog.addEventListener('click', (e) => { if (e.target === this.#dialog) this.#dialog.close(); });
   }
 

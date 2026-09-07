@@ -883,7 +883,7 @@ function commands() {
     { id: 'view-preview', label: 'View: preview only', run: view('preview') },
     { id: 'sidebar', label: `${sidebarOpen ? 'Hide' : 'Show'} file sidebar`, keys: `${modKey} B`, run: () => toggleSidebar() },
     { id: 'vim', label: `Turn vim mode ${settings.vim ? 'off' : 'on'}`, keys: `${modKey} ⇧ V`, run: () => update({ vim: !settings.vim }) },
-    { id: 'theme', label: 'Color scheme…', keys: `${modKey} ⇧ T`, run: pickTheme },
+    { id: 'theme', label: 'Color scheme…', run: pickTheme },
     { id: 'theme-system', label: 'Color scheme: follow system', run: () => { update({ theme: null }); applyTheme(); } },
     { id: 'language', label: 'Language mode…', hint: els.editor.languageName, run: pickLanguage },
     { id: 'wrap', label: `Turn line wrapping ${settings.lineWrap ? 'off' : 'on'}`, run: () => update({ lineWrap: !settings.lineWrap }) },
@@ -924,7 +924,7 @@ function commands() {
     { id: 'table', label: 'Markdown: table', run: () => els.editor.insertText('\n| Column | Column |\n| --- | --- |\n| cell | cell |\n') },
     { id: 'hr', label: 'Markdown: horizontal rule', run: () => els.editor.insertText('\n---\n') },
     { id: 'date', label: 'Insert today\'s date', run: () => els.editor.insertText(new Intl.DateTimeFormat(undefined, { dateStyle: 'long' }).format(new Date())) },
-    { id: 'help', label: 'Keyboard reference', keys: `${modKey} ?`, run: () => els.help.toggle() },
+    { id: 'help', label: 'Keyboard reference', keys: `${modKey} /`, run: () => els.help.toggle() },
     ...(installPrompt ? [{ id: 'install', label: 'Install as an app', run: promptInstall }] : []),
     { id: 'storage', label: 'Storage usage…', run: showStorage },
   ];
@@ -998,6 +998,7 @@ els.moreMenu.addEventListener('click', (e) => {
   const item = e.target.closest('[data-menu]');
   if (!item) return;
   const keepOpen = item.getAttribute('role') === 'menuitemcheckbox';
+  if (!keepOpen) els.moreMenu.hidePopover(); // close before acting: the action may open a modal dialog
   switch (item.dataset.menu) {
     case 'theme': pickTheme(); break;
     case 'vim': update({ vim: !settings.vim }); break;
@@ -1009,7 +1010,6 @@ els.moreMenu.addEventListener('click', (e) => {
     case 'help': els.help.toggle(); break;
     case 'storage': showStorage(); break;
   }
-  if (!keepOpen) els.moreMenu.hidePopover();
 });
 els.name.addEventListener('change', () => renameDocument(els.name.value));
 els.name.addEventListener('keydown', (e) => {
@@ -1085,10 +1085,13 @@ els.divider.addEventListener('keydown', (e) => {
 });
 
 // --- Keyboard shortcuts ------------------------------------------------------
+const inEditor = () => !!document.activeElement?.closest('editor-pane');
+const inTextField = () => !!document.activeElement?.closest('editor-pane, input, textarea, select, [contenteditable]');
 document.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (!mod) {
     if (e.key === 'Escape' && settings.zen && !document.querySelector('dialog[open]')) update({ zen: false });
+    else if (e.key === '?' && !e.altKey && !inTextField()) { e.preventDefault(); els.help.toggle(); }
     return;
   }
   const key = e.key.toLowerCase();
@@ -1103,12 +1106,14 @@ document.addEventListener('keydown', (e) => {
   else if (key === 'b' && !shift) { handled(); toggleSidebar(); }
   else if (key === 'e' && !shift) { handled(); if (isMarkdown()) update({ view: { editor: 'split', split: 'preview', preview: 'editor' }[settings.view] }); }
   else if (key === 'v' && shift) { handled(); update({ vim: !settings.vim }); }
-  else if (key === 't' && shift) { handled(); pickTheme(); }
   else if (key === 'z' && shift && !e.altKey && document.activeElement?.closest('editor-pane') === null) { handled(); update({ zen: !settings.zen }); }
   else if (key === 'f' && shift) { handled(); pickDocument(); }
   else if ((key === '=' || key === '+') && !shift) { handled(); update({ fontSize: Math.min(32, settings.fontSize + 1) }); }
   else if (key === '-' && !shift) { handled(); update({ fontSize: Math.max(9, settings.fontSize - 1) }); }
-  else if ((key === '?' || (key === '/' && shift))) { handled(); els.help.toggle(); }
+  // Help is ⌘/ (⌘? is the macOS Help-menu search and ⌘⇧T reopens a closed tab, so browsers keep those).
+  // Inside the editor ⌘/ stays "toggle comment": there, use ⌘K, :h, or ? from the preview.
+  else if (key === '/' && !shift && !inEditor()) { handled(); els.help.toggle(); }
+  else if (key === '?' || (key === '/' && shift)) { handled(); els.help.toggle(); }
 }, true);
 
 // Zen with ⌘⇧Z inside the editor would shadow redo, so bind it separately there.

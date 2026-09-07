@@ -23,7 +23,7 @@ npm run dev        # http://127.0.0.1:8787/
 - **Code**: 36 languages detected from the file name (JS/TS/JSX/TSX, HTML, CSS, JSON, Python, Rust, C/C++, C#, Go, Java, Kotlin, Swift, SQL, YAML, TOML, Shell, Ruby, Lua, and more), bracket matching, autocompletion, code folding, multiple cursors, search and replace.
 - **Documents**: autosaved to IndexedDB as you type; per-document undo history survives switching; open from disk, save back to the same file, drag and drop, OS "Open with" via manifest `file_handlers`.
 - **PWA**: installable, works fully offline, update toast when a new version is cached, `?new=1` shortcut, window-controls overlay on desktop.
-- **Keyboard first**: command palette (`⌘K`), fuzzy document switcher (`⌘⇧F`), zen mode (`⌘⇧Z`), help (`⌘?`).
+- **Keyboard first**: command palette (`⌘K`), fuzzy document switcher (`⌘⇧F`), zen mode (`⌘⇧Z`), help (`⌘/`).
 
 ## Review-brief mode
 

@@ -16,7 +16,7 @@ A small, fast, offline-first editor for **Markdown** and code. It runs entirely 
 | Save | \`⌘S\` |
 | Cycle editor → split → preview | \`⌘E\` |
 | Toggle vim mode | \`⌘⇧V\` |
-| Pick a color scheme | \`⌘⇧T\` |
+| Pick a color scheme | \`⌘K\` and type *color*, or click the scheme name in the status bar |
 | Zen mode | \`⌘⇧Z\` |
 | Keyboard reference | \`⌘/\` |
 
