@@ -997,10 +997,30 @@ els.files.addEventListener('select', async (e) => {
 els.files.addEventListener('create', () => createDocument({}));
 els.files.addEventListener('open', openFromDisk);
 els.files.addEventListener('delete', (e) => deleteDocument(e.detail.id));
-els.files.addEventListener('close', (e) => closeDocumentById(e.detail.id));
+els.files.addEventListener('close', async (e) => {
+  // a file from disk closes only when the disk has everything the editor has; otherwise ask
+  const d = docs.find((x) => x.id === e.detail.id);
+  if (d?.handle && !d.readOnly) {
+    let same = false;
+    try { same = (await files.readHandle(d.handle)).content === d.content; } catch { /* permission gone: treat as unsaved */ }
+    if (!same) { els.toast.show(`${d.name} has edits not saved to disk`, { duration: 8000, action: 'Close anyway', onAction: () => closeDocumentById(d.id) }); return; }
+  }
+  closeDocumentById(e.detail.id);
+});
 // close the read-only source copies except the active one; the brief and browser documents stay
+// ⊗ in the Open list: close every other document that has a copy elsewhere — read-only source files
+// from the brief, and files opened from disk whose disk copy matches the editor's. The brief stays,
+// browser-only documents stay (closing would delete their only copy), unsaved disk files stay.
 els.files.addEventListener('close-others', async () => {
-  for (const d of docs.filter((d) => d.readOnly && d.id !== active?.id)) await closeDocumentById(d.id);
+  let kept = 0;
+  for (const d of docs.filter((d) => d.id !== active?.id && !d.remote)) {
+    if (d.readOnly || d.source) { await closeDocumentById(d.id); continue; }
+    if (d.handle) {
+      try { if ((await files.readHandle(d.handle)).content === d.content) { await closeDocumentById(d.id); continue; } } catch { /* permission gone: keep it */ }
+    }
+    kept++;
+  }
+  if (kept) els.toast.show(`${kept} kept: browser-only or unsaved edits — close those with ×`);
 });
 
 els.status.addEventListener('status-action', (e) => {

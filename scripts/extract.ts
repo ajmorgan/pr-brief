@@ -208,8 +208,9 @@ function parseUnified(text: string): Map<string, Hunk[]> {
   let o = 0, n = 0;
   for (const line of text.split("\n")) {
     if (line.startsWith("diff --git ")) { cur = null; hunk = null; continue; }
-    if (line.startsWith("--- ")) { if (line.startsWith("--- a/")) cur = line.slice(6); continue; }
-    if (line.startsWith("+++ ")) { if (line.startsWith("+++ b/")) cur = line.slice(6); continue; }
+    // git ends the path with a tab when it contains a space; the a/ b/ prefixes are forced on every diff call
+    if (line.startsWith("--- ")) { if (line.startsWith("--- a/")) cur = line.slice(6).replace(/\t$/, ""); continue; }
+    if (line.startsWith("+++ ")) { if (line.startsWith("+++ b/")) cur = line.slice(6).replace(/\t$/, ""); continue; }
     if (cur === null) continue;
     const m = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/);
     if (m) {
@@ -264,9 +265,25 @@ function attribute(f: FileEntry, oldSyms: Sym[], newSyms: Sym[]): void {
   const base = (s: Sym) => `${s.scope ? s.scope + "." : ""}${s.name}|${s.kind}`;
   const dup = new Set<string>();
   for (const side of [oldSyms, newSyms]) { const c = new Map<string, number>(); for (const s of side) c.set(base(s), (c.get(base(s)) ?? 0) + 1); for (const [k, n] of c) if (n > 1) dup.add(k); }
-  for (const s of [...oldSyms, ...newSyms]) if (dup.has(base(s))) s.disc = paramsOf(s.signature);
+  // no parameter list to tell them apart (rules, consts, keys, sections, elements): the ordinal among
+  // same-named siblings on that side does, and stays stable across sides while the order is unchanged
+  for (const side of [oldSyms, newSyms]) {
+    const keys = new Set<string>(), ord = new Map<string, number>();
+    for (const s of side) {
+      if (!dup.has(base(s))) continue;
+      const n = (ord.get(base(s)) ?? 0) + 1;
+      ord.set(base(s), n);
+      s.disc = paramsOf(s.signature) || `#${n}`;
+      while (keys.has(symKey(s))) s.disc += "#"; // identical parameter lists: still two symbols
+      keys.add(symKey(s));
+    }
+  }
   const oldMap = new Map(oldSyms.map((s) => [symKey(s), s]));
   const newMap = new Map(newSyms.map((s) => [symKey(s), s]));
+  if (oldMap.size !== oldSyms.length || newMap.size !== newSyms.length) die(`internal: symbol keys collide in ${f.path} — please report this`);
+  const newLinesArr = (f.newContent ?? "").split("\n"), oldLinesArr = (f.oldContent ?? "").split("\n");
+  // the hash covers the attributed span (comment lines above the declaration included), which is what the hunk shows
+  const spanText = (s: Sym, lines: string[]) => lines.slice(s.start - 1, s.end).join("\n");
   const units = new Map<string, Unit>();
   const mk = (key: string, s: Sym, status: Unit["status"], old: Sym | null, nw: Sym | null): Unit => {
     let u = units.get(key);
@@ -275,13 +292,12 @@ function attribute(f: FileEntry, oldSyms: Sym[], newSyms: Sym[]): void {
       id: `${f.path}#${qualName(s)}`, path: f.path, kind: s.kind, name: s.name, scope: s.scope, status,
       oldSpan: old ? [old.start, old.end] : null, newSpan: nw ? [nw.start, nw.end] : null,
       signature: (nw ?? s).signature, oldSignature: old ? old.signature : null, display: displayName((nw ?? s).signature, s.name, s.kind),
-      newLines: new Set(), oldLines: new Set(), hunk: "", callers: null, tags: [], hash: sha((nw ?? old ?? s).text), badge: "", renamedFrom: null, col: (nw ?? s).col,
+      newLines: new Set(), oldLines: new Set(), hunk: "", callers: null, tags: [], hash: sha(nw ? spanText(nw, newLinesArr) : spanText(old ?? s, oldLinesArr)), badge: "", renamedFrom: null, col: (nw ?? s).col,
       slots: {}, revise: null, notes: null,
     };
     units.set(key, u);
     return u;
   };
-  const newLinesArr = (f.newContent ?? "").split("\n"), oldLinesArr = (f.oldContent ?? "").split("\n");
   // symbols that contain other symbols (classes, describe blocks, factory-built consts…): a blank
   // line between their members is nobody's change
   const isContainer = (syms: Sym[]) => new Set(syms.filter((a) => syms.some((b) => b !== a && b.start >= a.start && b.end <= a.end)));
@@ -289,13 +305,14 @@ function attribute(f: FileEntry, oldSyms: Sym[], newSyms: Sym[]): void {
   const newImports = importLines(newLinesArr), oldImports = importLines(oldLinesArr);
   for (const h of f.hunksU0) {
     const strayNew: number[] = [], strayOld: number[] = [];
+    const blankNew: number[] = [], blankOld: number[] = []; // blank lines outside any symbol: a change only when nothing else is
     const preamble = /^\s*(#!|#\s|#$|\/\/|\/\*|\*|\*\/|package\s|import\s|export\s+\*|export\s+\{|from\s)/; // "# " is a YAML/Python/shell comment; Markdown headings never reach this test (they are inside a section)
     for (let ln = h.newStart; ln < h.newStart + h.newLen; ln++) {
       const s = innermost(newSyms, ln);
       const text = newLinesArr[ln - 1] ?? "";
       const blank = !text.trim();
       // in an added file the license header, package line, and imports are not a change to review
-      if (!s) { if (!blank && !(f.status === "A" && (preamble.test(text) || newImports.has(ln)))) strayNew.push(ln); continue; }
+      if (!s) { if (blank) blankNew.push(ln); else if (!(f.status === "A" && (preamble.test(text) || newImports.has(ln)))) strayNew.push(ln); continue; }
       if (blank && newContainers.has(s)) continue; // nor is a blank line between members of a container
       const k = symKey(s);
       const old = oldMap.get(k) ?? null;
@@ -304,11 +321,16 @@ function attribute(f: FileEntry, oldSyms: Sym[], newSyms: Sym[]): void {
     for (let ln = h.oldStart; ln < h.oldStart + h.oldLen; ln++) {
       const s = innermost(oldSyms, ln);
       const blank = !(oldLinesArr[ln - 1] ?? "").trim();
-      if (!s) { if (!blank) strayOld.push(ln); continue; }
+      if (!s) { if (blank) blankOld.push(ln); else strayOld.push(ln); continue; }
       if (blank && oldContainers.has(s)) continue;
       const k = symKey(s);
       const nw = newMap.get(k) ?? null;
       mk(k, s, nw ? "modified" : "deleted", s, nw).oldLines.add(ln);
+    }
+    let whitespaceOnly = false;
+    if (!strayNew.length && !strayOld.length && (blankNew.length || blankOld.length) && !h.plusLines.some((l) => newLinesArr[l - 1]?.trim() && !innermost(newSyms, l)) && h.body.every((l) => !l.slice(1).trim())) {
+      // a hunk of nothing but blank lines between symbols: shown, so the file section never has slots over an empty diff
+      strayNew.push(...blankNew); strayOld.push(...blankOld); whitespaceOnly = true;
     }
     if (strayNew.length || strayOld.length) {
       const anchor = h.newLen > 0 ? h.newStart : h.oldStart;
@@ -326,6 +348,7 @@ function attribute(f: FileEntry, oldSyms: Sym[], newSyms: Sym[]): void {
         };
         units.set(key, u);
       }
+      if (whitespaceOnly && !u.tags.includes("whitespace-only")) u.tags.push("whitespace-only");
       for (const ln of strayNew) u.newLines.add(ln);
       for (const ln of strayOld) u.oldLines.add(ln);
       const nl = [...u.newLines], ol = [...u.oldLines];
@@ -340,15 +363,20 @@ function attribute(f: FileEntry, oldSyms: Sym[], newSyms: Sym[]): void {
   // lines (the name line differs); the pair becomes one modified unit, renamed from the old name
   const lineSet = (t: string) => new Set(t.split("\n").map((l) => l.trim()).filter(Boolean));
   const similar = (a: string, b: string) => { const A = lineSet(a), B = lineSet(b); let both = 0; for (const l of A) if (B.has(l)) both++; return both / Math.max(1, Math.max(A.size, B.size)); };
+  // a body worth pairing has at least two lines that are not the signature and not a lone brace or
+  // annotation; boilerplate (`return true;`, `TODO()`) is not evidence of a rename
+  const bodyLines = (t: string, name: string) => { const ls = t.split("\n").map((l) => l.trim()).filter(Boolean); const i = ls.findIndex((l) => l.includes(name)); return ls.slice(i + 1).filter((l) => !/^[{}();]*$/.test(l) && !l.startsWith("@")); };
+  const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   for (const [dk, d] of [...units]) {
     if (d.status !== "deleted" || d.kind === "other") continue;
     const dText = oldSyms.find((sy) => symKey(sy) === dk)?.text ?? "";
+    if (bodyLines(dText, d.name).length < 2) continue;
     let best: [string, Unit, number] | null = null;
     for (const [nk, n] of units) {
       if (n.status !== "new" || n.kind !== d.kind) continue;
       const nText = newSyms.find((sy) => symKey(sy) === nk)?.text ?? "";
-      const sim = similar(dText.split(d.name).join(n.name), nText);
-      if (sim >= 0.75 && (!best || sim > best[2])) best = [nk, n, sim];
+      const sim = similar(dText.replace(new RegExp(`\\b${escapeRe(d.name)}\\b`, "g"), n.name), nText);
+      if (sim >= 0.9 && (!best || sim > best[2])) best = [nk, n, sim];
     }
     if (!best) continue;
     const n = best[1];
@@ -457,14 +485,19 @@ function renderHunk(f: FileEntry, u: Unit, fullFnMax: number): string {
 
 function findCallers(sg: string, files: FileEntry[], rev: string | null): void {
   const targets: { u: Unit; lang: string }[] = [];
-  for (const f of files) for (const u of f.units) if (f.lang && CALLABLE_KINDS.has(u.kind) && u.status !== "new") targets.push({ u, lang: f.lang });
+  // a language with no call syntax to search (bash, html, css, yaml, markdown) gets no Callers line at all
+  for (const f of files) for (const u of f.units) if (f.lang && CALLER_LANGS[f.lang]?.length && CALLABLE_KINDS.has(u.kind) && u.status !== "new") targets.push({ u, lang: f.lang });
+  // a constructor is called by its class name; `new` exists in Java/TS/JS only
+  const ctorName = (u: Unit) => (u.name === "constructor" ? u.scope.split(".").pop() ?? u.name : u.name);
+  const hasNew = (lang: string) => lang === "java" || lang === "typescript" || lang === "tsx" || lang === "javascript";
   findTypeReferences(files, rev);
   if (rev) {
     // historical commit: the working tree may be far ahead, so search the commit's tree by name with git grep
     const exts = Object.keys(LANG_BY_EXT);
     for (const { u } of targets) {
       // POSIX ERE (no \b): a name not preceded by an identifier character
-      const pat = u.kind === "constructor" ? `new[[:space:]]+${u.name}[[:space:]]*\\(` : `(^|[^A-Za-z0-9_$])${u.name}[[:space:]]*\\(`;
+      const lang = targets.find((t) => t.u === u)!.lang;
+      const pat = u.kind === "constructor" ? (hasNew(lang) ? `new[[:space:]]+${ctorName(u)}[[:space:]]*\\(` : `(^|[^A-Za-z0-9_$.])${ctorName(u)}[[:space:]]*\\(`) : `(^|[^A-Za-z0-9_$])${u.name}[[:space:]]*\\(`;
       const out = gitOk(["grep", "-n", "-E", pat, rev, "--", SCOPE]) ?? "";
       const sites = new Set<string>();
       for (const line of out.split("\n")) {
@@ -487,7 +520,7 @@ function findCallers(sg: string, files: FileEntry[], rev: string | null): void {
   const sitesById = new Map<string, Set<string>>();
   for (const [L, list] of byLang) {
     const rules = list.map(({ u, rid }) => {
-      const pats = u.kind === "constructor" ? [`new ${u.name}($$$)`] : [`${u.name}($$$)`, `$OBJ.${u.name}($$$)`];
+      const pats = u.kind === "constructor" ? (hasNew(L) ? [`new ${ctorName(u)}($$$)`] : [`${ctorName(u)}($$$)`]) : [`${u.name}($$$)`, `$OBJ.${u.name}($$$)`];
       return `id: ${rid}\nlanguage: ${L}\nrule:\n  any:\n${pats.map((p) => `    - pattern: ${JSON.stringify(p)}`).join("\n")}`;
     }).join("\n---\n");
     const r = spawnSync(sg, ["scan", "--json=compact", "--inline-rules", rules, SCOPE], { cwd: ROOT, encoding: "utf8", maxBuffer: 1 << 28 });
@@ -584,7 +617,7 @@ function main(): void {
   if (R.newSide === "worktree" && a.untracked) {
     const known = new Set(files.map((f) => f.path));
     for (const p of git(["ls-files", "--others", "--exclude-standard", ...excl]).split("\n")) {
-      if (!p || known.has(p)) continue;
+      if (!p || known.has(p) || p.endsWith("/")) continue; // a trailing slash is a nested repository, not a file
       untracked.add(p);
       files.push({ path: p, status: "A", renamedFrom: null, lang: langOf(p), binary: false, oldContent: null, newContent: null, hash: "", units: [], tags: [], hunksU0: [], hunksU3: [], hunksW: [], slots: {}, notes: null, commitsSinceLast: [], revise: null });
     }
@@ -598,13 +631,32 @@ function main(): void {
     if (m && m[2] !== "unspecified" && m[2] !== "false") { const f = files.find((f) => f.path === m[1]); if (f) f.tags.push("generated"); }
   }
   for (const f of files) if (!f.tags.includes("generated") && /(\.min\.(js|css)$|(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|go\.sum)$)/.test(f.path)) f.tags.push("generated");
-  const u0 = parseUnified(git(["diff", "-U0", "-M", "--no-color", "--no-ext-diff", ...R.diffArgs, ...excl]));
-  const u3 = parseUnified(git(["diff", "-U3", "-M", "--no-color", "--no-ext-diff", ...R.diffArgs, ...excl]));
-  const uw = parseUnified(git(["diff", "-U0", "-w", "-M", "--no-color", "--no-ext-diff", ...R.diffArgs, ...excl]));
+  const PREFIX = ["--src-prefix=a/", "--dst-prefix=b/"]; // the parser keys hunks by these, whatever diff.noprefix/mnemonicPrefix say
+  const u0 = parseUnified(git(["diff", "-U0", "-M", "--no-color", "--no-ext-diff", ...PREFIX, ...R.diffArgs, ...excl]));
+  const u3 = parseUnified(git(["diff", "-U3", "-M", "--no-color", "--no-ext-diff", ...PREFIX, ...R.diffArgs, ...excl]));
+  const uw = parseUnified(git(["diff", "-U0", "-w", "-M", "--no-color", "--no-ext-diff", ...PREFIX, ...R.diffArgs, ...excl]));
+  // self-check: a text file git counts changed lines for must have produced hunks, or the parser missed it
+  {
+    const z = git(["diff", "--numstat", "-z", "-M", "--no-color", "--no-ext-diff", ...R.diffArgs, ...excl]).split("\0");
+    for (let i = 0; i < z.length; i++) {
+      const m = z[i].match(/^(\d+|-)\t(\d+|-)\t(.*)$/);
+      if (!m) continue;
+      let p = m[3];
+      if (p === "") { p = z[i + 2]; i += 2; } // a rename: the old and new paths follow as two records
+      if (m[1] === "-" || +m[1] + +m[2] === 0 || !files.some((f) => f.path === p)) continue;
+      if (!u0.get(p)?.length) die(`internal: git reports changed lines in ${p} but no hunk was parsed for it — please report this`);
+    }
+  }
 
   // contents
   const readNew = (p: string): string | null => {
-    if (R.newSide === "worktree") return fs.existsSync(path.join(ROOT, p)) ? fs.readFileSync(path.join(ROOT, p), "utf8") : null;
+    if (R.newSide === "worktree") {
+      const abs = path.join(ROOT, p);
+      let st: fs.Stats; try { st = fs.lstatSync(abs); } catch { return null; }
+      if (st.isSymbolicLink()) return fs.readlinkSync(abs); // what git diffs: the link target
+      if (st.isDirectory()) return null; // a submodule pointer: the diff hunk says what moved
+      return fs.readFileSync(abs, "utf8");
+    }
     if (R.newSide === "index") return gitOk(["show", `:${p}`]);
     return gitOk(["show", `${R.newSide}:${p}`]);
   };
@@ -693,7 +745,7 @@ function main(): void {
   const prevHead = prev?.front.head ?? null, prevSnap = prev?.front.snapshot ?? null;
   const snapOk = prevSnap && gitOk(["cat-file", "-e", `${prevSnap}^{commit}`]) !== null;
   const newCommits = prev && prevHead ? (gitOk(["log", "--reverse", "--format=%h %s", `${prevHead}..${R.head}`]) ?? "").trim().split("\n").filter(Boolean) : [];
-  const sinceDiff = snapOk ? parseUnified(git(["diff", "-U3", "--no-color", "--no-renames", prevSnap, ...(R.newSide === "worktree" ? [] : R.newSide === "index" ? ["--cached"] : [R.newSide]), ...excl], { ok: true })) : new Map<string, Hunk[]>();
+  const sinceDiff = snapOk ? parseUnified(git(["diff", "-U3", "--no-color", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", prevSnap, ...(R.newSide === "worktree" ? [] : R.newSide === "index" ? ["--cached"] : [R.newSide]), ...excl], { ok: true })) : new Map<string, Hunk[]>();
   const counts = { changed: 0, removed: 0, unchanged: 0 };
   let carried = 0;
   const lock = (text: string | undefined): { locked: boolean; text: string } | null => (text && !isToken(text) ? { locked: true, text } : null);
@@ -746,7 +798,7 @@ function main(): void {
       if (pf.slots.notes) f.notes = pf.slots.notes;
     }
     // the same commit briefed before, with no brief of it on disk: its file prose comes back from the cache
-    const pfPrev = prev ? fileMaps[0].get(f.path) ?? null : (a.mode === "commit" && cache[`${f.path}@commit@${R.head}`] ? { slots: { purpose: f.slots.purpose?.text, ...cache[`${f.path}@commit@${R.head}`].slots } } : null);
+    const pfPrev = prev ? fileMaps[sources.indexOf(prev)].get(f.path) ?? null : (a.mode === "commit" && cache[`${f.path}@commit@${R.head}`] ? { slots: { purpose: f.slots.purpose?.text, ...cache[`${f.path}@commit@${R.head}`].slots } } : null);
     if (pfPrev) {
       const c = lock(pfPrev.slots.changes);
       if (!anyChanged) { if (c) f.slots.changes = c; const r = lock(pfPrev.slots.review); if (r) f.slots.review = r; else if (!pfPrev.slots.review && (c ?? lock(pfPrev.slots.purpose))) f.slots.review = { locked: true, text: "" }; }
@@ -756,7 +808,10 @@ function main(): void {
   if (prev) for (const id of prevUnits.keys()) if (!files.some((f) => f.units.some((u) => u.id === id))) counts.removed++;
   const overviewLocked = prev && prev.overview && !isToken(prev.overview) && counts.changed + counts.removed === 0 ? prev.overview
     : !prev && a.mode === "commit" && cache[`overview@commit@${R.head}`] ? cache[`overview@commit@${R.head}`].slots.overview : null;
-  const orphanNotes = prev ? [...prevUnits.values()].filter((pu) => pu.slots.notes && !files.some((f) => f.units.some((u) => u.id === pu.id))).map((pu) => `- \`${pu.id}\` — ${pu.slots.notes}`) : [];
+  // reviewer notes on units that left the range are never dropped: they come from the first filled
+  // source whether or not it is the same work (after the noted work is committed, it is not)
+  const primaryUnits: Map<string, any> = primary ? new Map(primary.files.flatMap((pf) => pf.units.map((pu) => [pu.id, pu] as const))) : new Map();
+  const orphanNotes = [...primaryUnits.values()].filter((pu) => pu.slots.notes && !isToken(pu.slots.notes) && !files.some((f) => f.units.some((u) => u.id === pu.id))).map((pu) => `- \`${pu.id}\` — ${pu.slots.notes}`);
 
   // snapshot (§15.1)
   const dirty = git(["status", "--porcelain", "--untracked-files=no", ...excl]).trim() !== "" || untracked.size > 0;
@@ -809,7 +864,8 @@ function main(): void {
   const expected: string[] = [];
   const slotIndex: any[] = [];
   // relative Markdown links into the repo: GitHub resolves them, the viewer opens the file at the line
-  const link = (label: string, file: string, line?: number) => `[\`${label}\`](${file}${line ? `#L${line}` : ""})`;
+  // a destination with a space or parentheses is not a Markdown link unless wrapped in <…>
+  const link = (label: string, file: string, line?: number) => { const dest = `${file}${line ? `#L${line}` : ""}`; return `[\`${label}\`](${/[\s()<>]/.test(dest) ? `<${dest}>` : dest})`; };
   const siteLink = (s: string) => { const i = s.lastIndexOf(":"); return link(s, s.slice(0, i), +s.slice(i + 1)); };
   // fence longer than any backtick run inside the hunk, so Markdown in a hunk cannot close it
   const fence = (s: string) => { const n = Math.max(3, ...[...s.matchAll(/^[ +-]? {0,3}(`+)/gm)].map((m) => m[1].length + 1)); const f = "`".repeat(n); return [f + "diff", ...s.split("\n"), f]; };
@@ -880,7 +936,7 @@ function main(): void {
       slotIndex.push({ scope: "unit", id: u.id, kind: u.kind, status: u.status, slots: u.slots, notes: u.notes, name: u.name });
     }
   }
-  if (orphanNotes.length) L.push("---", "", "## Orphaned notes", "", "Notes from the previous brief whose units no longer exist in this range.", "", ...orphanNotes, "");
+  if (orphanNotes.length) { expected.push("## Orphaned notes"); L.push("---", "", "## Orphaned notes", "", "Notes from the previous brief whose units no longer exist in this range.", "", ...orphanNotes, ""); }
 
   // slot instructions must not contain ">" so that `<<rb:… | …>>` is always delimited by the first ">>".
   // Applied outside code fences only — a hunk may legitimately contain that text (this file's own source does).
@@ -893,7 +949,7 @@ function main(): void {
   }).join("\n");
   // state for lint (§14): lives under .git so it is never in the diff
   fs.mkdirSync(stateDir, { recursive: true });
-  if (prev && fs.existsSync(outAbs)) fs.copyFileSync(outAbs, path.join(stateDir, "previous.md"));
+  if (fs.existsSync(outAbs)) fs.copyFileSync(outAbs, path.join(stateDir, "previous.md")); // whatever is overwritten stays recoverable
   else if (fs.existsSync(path.join(stateDir, "previous.md"))) fs.rmSync(path.join(stateDir, "previous.md"));
   fs.writeFileSync(path.join(stateDir, "units.json"), JSON.stringify({
     out: outRel, mode: a.mode, generated: new Date().toISOString(), expected, overviewLocked, slotIndex,

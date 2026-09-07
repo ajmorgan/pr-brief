@@ -164,6 +164,7 @@ body
 
 ## Section B
 EOF2
+cp -R "$FX/src" "$FX/../src-edited" && cp "$FX/app.yaml" "$FX/../app.yaml-edited"   # the wip change set, restored after the language commits
 cd "$FX" && git add -A && git commit -qm langs
 sedi 's/return helper()/return helper() + 1/' lang/a.py
 sedi 's/repo.put(o)/repo.put(o); log(o)/' lang/b.kt; printf 'fun extra() = 3\n' >> lang/b.kt
@@ -190,17 +191,40 @@ if [ "$actual2" != "$expected2" ]; then
 fi
 git -C "$FX" checkout -q -- lang && git -C "$FX" rm -rq lang && git -C "$FX" commit -qm "drop lang" && git -C "$FX" reset -q --hard HEAD~2 2>/dev/null || true
 
-# skeleton + lint round trip: fill every slot mechanically, lint must pass
-node "$SK/scripts/extract.ts" >/dev/null
-node -e '
+# restore the wip change set (Svc.java and parse.ts edited, app.yaml edited, fresh.ts untracked) so the
+# round trip below exercises carry-over on real units
+cp "$FX/../src-edited/"* "$FX/src/" && cp "$FX/../app.yaml-edited" "$FX/app.yaml"
+fill() { node -e '
 const fs=require("fs"); let t=fs.readFileSync("REVIEW_BRIEF.md","utf8");
 t=t.replace(/<<rb:changes [^|]*\| [^\n]*?Must name every unit below: ([^\n]*?)>>/g,(m,names)=>"Touches "+names.split(", ").map(n=>"`"+n+"`").join(", ")+".");
 t=t.replace(/<<rb:[^\n]*?>>/g,"placeholder text.");
-fs.writeFileSync("REVIEW_BRIEF.md",t);'
+fs.writeFileSync("REVIEW_BRIEF.md",t);'; }
+# skeleton + lint round trip: fill every slot mechanically, lint must pass
+node "$SK/scripts/extract.ts" >/dev/null
+fill
 node "$SK/scripts/lint.ts" || { echo "FAIL: lint did not pass on a fully filled brief"; exit 1; }
-# second run must carry everything over
+# second run must carry everything over — and there must be units to carry
 out="$(node "$SK/scripts/extract.ts")"
-case "$out" in *"0 slots to fill"*) ;; *) echo "FAIL: rerun did not carry over: $out"; exit 1 ;; esac
+case "$out" in *"0 slots to fill"*"units carried over)"*) ;; *) echo "FAIL: rerun did not carry over: $out"; exit 1 ;; esac
+# reviewer notes: one on a unit whose body then changes (kept, marked stale), one on a unit that then
+# disappears (orphaned, never dropped); a since-last hunk containing --> must not break note stripping
+node -e '
+const fs=require("fs"); let t=fs.readFileSync("REVIEW_BRIEF.md","utf8");
+const note=(id,text)=>{ const m=t.indexOf("<!-- rb:unit id=\""+id+"\""); if(m<0) throw new Error("unit missing "+id); const eol=t.indexOf("\n",m); t=t.slice(0,eol+1)+"\n**Notes:** "+text+"\n"+t.slice(eol+1); };
+note("src/parse.ts#parseConfig","keep me"); note("src/parse.ts#Loader.size","gone note");
+fs.writeFileSync("REVIEW_BRIEF.md",t);'
+sedi 's/throw new Error("missing")/throw new Error("absent")/; /size(): number/d' src/parse.ts
+sedi 's/validate(o);/validate(o); String tag = "<!-- x -->";/' src/Svc.java
+node "$SK/scripts/extract.ts" >/dev/null
+grep -q 'keep me' REVIEW_BRIEF.md || { echo "FAIL: note on an edited unit was dropped"; exit 1; }
+grep -q '^## Orphaned notes' REVIEW_BRIEF.md && grep -q 'gone note' REVIEW_BRIEF.md || { echo "FAIL: note on a removed unit was not orphaned"; exit 1; }
+grep -q '<!-- rb:revise' REVIEW_BRIEF.md || { echo "FAIL: no revise note for the edited unit"; exit 1; }
+fill
+node "$SK/scripts/lint.ts" || { echo "FAIL: lint failed with notes and an orphaned-notes section"; exit 1; }
+grep -q 'rb:revise' REVIEW_BRIEF.md && { echo "FAIL: revise notes survived lint"; exit 1; }
+grep -q '^-->' REVIEW_BRIEF.md && { echo "FAIL: a stray --> survived note stripping"; exit 1; }
+grep -q 'keep me' REVIEW_BRIEF.md || { echo "FAIL: note lost by lint"; exit 1; }
+git -C "$FX" checkout -q -- src app.yaml && rm -f "$FX/src/fresh.ts"
 
 # --- overloads, a renamed method, commit mode ---------------------------------------------
 cd "$FX"

@@ -36,7 +36,10 @@ node ~/.claude/skills/review-brief/scripts/extract.ts $ARGUMENTS
   do not detect functions yourself. When the user says it is installed, start
   again from Step 1.
 - Exit code **1**: relay the error verbatim. STOP.
-- Exit code **0**: it printed `wrote REVIEW_BRIEF.md: … N slots to fill`.
+- Exit code **0** and the arguments contain `--list`, `--check` or
+  `--section`: extract printed a table or a check and wrote nothing. Relay
+  its output verbatim. STOP.
+- Exit code **0** otherwise: it printed `wrote REVIEW_BRIEF.md: … N slots to fill`.
   Continue. If N is 0, go to Step 4.
 
 `$ARGUMENTS` is passed through unchanged. With no arguments the brief covers

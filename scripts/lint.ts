@@ -80,9 +80,11 @@ function main(): void {
         const v = f.slots[key];
         if (v === undefined) { P("EMPTY", `${labelOf(key)} ${s.path}`, "label line is missing — restore it and write the text"); continue; }
         if (isToken(v)) continue;
-        if (s.slots[key]?.locked && v !== s.slots[key].text) P("LOCKED", `**${key[0].toUpperCase() + key.slice(1)}:** ${s.path}`, "carried-over text was changed — restore the previous text");
-        if (wordCount(v) > budget) P("BUDGET", `**${key[0].toUpperCase() + key.slice(1)}:** ${s.path}`, `${wordCount(v)} words > ${budget} — shorten`);
-        if (!s.slots[key]?.locked) { const st = styleProblem(v); if (st) P("STYLE", `**${key[0].toUpperCase() + key.slice(1)}:** ${s.path}`, `${st} is filler or restates the heading — cut it`); }
+        // carried-over text is locked as it was: neither the budget nor the style rule applies to it, or
+        // the agent could be told both to shorten it and to restore it
+        if (s.slots[key]?.locked && v !== s.slots[key].text) P("LOCKED", `${labelOf(key)} ${s.path}`, "carried-over text was changed — restore the previous text");
+        if (!s.slots[key]?.locked && wordCount(v) > budget) P("BUDGET", `${labelOf(key)} ${s.path}`, `${wordCount(v)} words > ${budget} — shorten`);
+        if (!s.slots[key]?.locked) { const st = styleProblem(v); if (st) P("STYLE", `${labelOf(key)} ${s.path}`, `${st} is filler or restates the heading — cut it`); }
       }
       const ch = f.slots.changes;
       if (ch && !isToken(ch)) for (const n of s.unitNames) if (!ch.includes(n)) P("MISSING", `**Changes:** ${s.path}`, `does not name unit \`${n}\` — mention it`);
@@ -102,7 +104,7 @@ function main(): void {
       if (v === undefined || v === "") { P("EMPTY", label, key === "other" ? "text after the ` — ` is missing — write it" : "label line is missing — restore it and write the text"); continue; }
       if (isToken(v)) continue;
       if (s.slots[key]?.locked && v !== s.slots[key].text) P("LOCKED", label, "carried-over text was changed — restore the previous text");
-      if (wordCount(v) > budget && !(key === "change" && v.trim() === "formatting only")) P("BUDGET", label, `${wordCount(v)} words > ${budget} — shorten`);
+      if (!s.slots[key]?.locked && wordCount(v) > budget && !(key === "change" && v.trim() === "formatting only")) P("BUDGET", label, `${wordCount(v)} words > ${budget} — shorten`);
       if (!s.slots[key]?.locked) { const st = styleProblem(v); if (st) P("STYLE", label, `${st} is filler or restates the heading — cut it`); }
     }
     checkReview(u.slots.review, s.slots.review, `**Review Observations:** ${s.id}`);
@@ -117,8 +119,9 @@ function main(): void {
     if (v === undefined) { if (locked?.locked && locked.text) P("LOCKED", label, "carried-over observations were removed — restore them"); return; }
     if (v === "" ) { P("EMPTY", label, "either write an observation or delete the whole line"); return; }
     if (isToken(v)) return; // reported as EMPTY by the token scan
+    if (/^\W*(none|n\/a|nothing( to (note|report|observe|say))?|no (observations?|issues?|concerns?|notes?)|nil)\b\W*$/i.test(v)) { P("EMPTY", label, "'none' is not an observation — delete the whole line"); return; }
     if (locked?.locked && locked.text && v !== locked.text) P("LOCKED", label, "carried-over text was changed — restore the previous text");
-    if (wordCount(v) > BUDGETS.review) P("BUDGET", label, `${wordCount(v)} words > ${BUDGETS.review} — shorten`);
+    if (!locked?.locked && wordCount(v) > BUDGETS.review) P("BUDGET", label, `${wordCount(v)} words > ${BUDGETS.review} — shorten`);
     if (!locked?.text) { const st = styleProblem(v); if (st) P("STYLE", label, `${st} is filler — cut it`); }
   }
 

@@ -23,7 +23,7 @@ export class FileList extends HTMLElement {
     this.innerHTML = `
       <div class="file-list-head">
         <span class="file-list-title" data-action="collapse">Files</span>
-        <button type="button" class="icon-btn file-close-others" data-action="close-others" title="Close the other opened files (keeps the brief)" aria-label="Close other files">⊗</button>
+        <button type="button" class="icon-btn file-close-others" data-action="close-others" title="Close the other opened files — keeps the brief, browser-only documents, and files with unsaved edits" aria-label="Close other files">⊗</button>
         <button type="button" class="icon-btn" data-action="open" title="Open from disk (⌘O)" aria-label="Open file">⤒</button>
         <button type="button" class="icon-btn" data-action="create" title="New document (⌘N)" aria-label="New document">＋</button>
       </div>
@@ -111,9 +111,10 @@ export class FileList extends HTMLElement {
       del.type = 'button';
       del.className = 'icon-btn file-delete';
       del.textContent = '×';
-      // a document served by a local server or opened read-only from a repo is a copy: × just closes it.
-      // A browser-only document has no other copy: × arms a "Delete?" confirmation first.
-      const isCopy = !!doc.remote || !!doc.source || !!doc.readOnly;
+      // a document with a copy elsewhere — served by a local server, opened read-only from a repo, or
+      // opened from a file on disk — is closed by ×. A browser-only document has no other copy: × arms
+      // a "Delete?" confirmation first.
+      const isCopy = !!doc.remote || !!doc.source || !!doc.readOnly || !!doc.handle;
       del.dataset.action = isCopy ? 'close' : 'delete';
       del.setAttribute('aria-label', `${isCopy ? 'Close' : 'Delete'} ${doc.name}`);
       del.title = isCopy ? 'Close (the file on disk is untouched)' : 'Delete from this browser';

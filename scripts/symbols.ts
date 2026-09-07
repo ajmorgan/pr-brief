@@ -28,7 +28,8 @@ export interface Sym {
 export function scanSymbols(sg: string, dir: string): Map<string, Sym[]> {
   const out = new Map<string, Sym[]>();
   if (!fs.existsSync(dir)) return out;
-  const r = spawnSync(sg, ["scan", "-c", path.join(SKILL_DIR, "sgconfig.yml"), "--json=compact", "."], { cwd: dir, encoding: "utf8", maxBuffer: 1 << 28 });
+  // --no-ignore hidden: .github/, .claude/ and other dot-directories hold real files (workflows, skills)
+  const r = spawnSync(sg, ["scan", "-c", path.join(SKILL_DIR, "sgconfig.yml"), "--json=compact", "--no-ignore", "hidden", "."], { cwd: dir, encoding: "utf8", maxBuffer: 1 << 28 });
   if (r.status !== 0) throw new Error(`ast-grep scan failed in ${dir}:\n${r.stderr}`);
   const matches = r.stdout.trim() ? JSON.parse(r.stdout) : [];
   const byFile = new Map<string, any[]>();
@@ -41,7 +42,9 @@ export function scanSymbols(sg: string, dir: string): Map<string, Sym[]> {
     const content = fs.readFileSync(path.join(dir, rel), "utf8").split("\n");
     const syms: Sym[] = ms.map((m) => {
       let start = m.range.start.line + 1;
-      const end = m.range.end.line + 1;
+      // a node that ends at column 0 of a line (Markdown sections end where the next heading starts)
+      // does not own that line
+      const end = m.range.end.column === 0 && m.range.end.line > m.range.start.line ? m.range.end.line : m.range.end.line + 1;
       // rule id <lang>-<kind>[.<variant>]: the kind names the unit, the variant only selects a shape
       const [kind, variant] = m.ruleId.replace(/^[a-z]+-/, "").split(".");
       // Javadoc / comment lines directly above a declaration belong to it, not to the enclosing container
@@ -112,7 +115,9 @@ export function signatureOf(text: string, kind: string): string {
 }
 
 export function symKey(s: Sym): string { return `${s.scope ? s.scope + "." : ""}${s.name}${s.disc ?? ""}|${s.kind}`; }
-export function qualName(s: { scope: string; name: string; disc?: string }): string { return `${s.scope ? s.scope + "." : ""}${s.name}${s.disc ?? ""}`; }
+// an ordinal discriminator (#n, for same-named symbols with no parameter list) keys the symbol but is
+// not part of its id: duplicate ids get a line suffix later, which is what the reader can find
+export function qualName(s: { scope: string; name: string; disc?: string }): string { return `${s.scope ? s.scope + "." : ""}${s.name}${s.disc && !s.disc.startsWith("#") ? s.disc : ""}`; }
 // the parameter list of a signature, whitespace-normalised: "(Order o, boolean force)"
 export function paramsOf(sig: string): string {
   const i = sig.indexOf("("); if (i < 0) return "";

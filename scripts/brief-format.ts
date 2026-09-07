@@ -220,5 +220,14 @@ export function parseBrief(text: string): ParsedBrief {
 }
 
 export function stripReviseNotes(text: string): string {
-  return text.replace(/<!-- rb:revise[\s\S]*?-->\n?/g, "");
+  // line-wise, with the parser's rule: a note runs to the first line that is exactly `-->`; a `-->`
+  // inside a quoted hunk line does not end it
+  const out: string[] = [];
+  let inNote = false;
+  for (const l of text.split("\n")) {
+    if (inNote) { if (l.trim() === "-->") inNote = false; continue; }
+    if (l.startsWith("<!-- rb:revise")) { inNote = !l.trim().endsWith("-->"); continue; }
+    out.push(l);
+  }
+  return out.join("\n");
 }
