@@ -13,7 +13,7 @@ Agentic coding produces more change per hour than a person can hold in their hea
 
 1. **The list of changed units is computed, never written.** A script derives files, functions, and hunks from git + a parser. The agent cannot add, drop, rename, or reorder a unit.
 2. **File is the unit; function is the drill-down.** Every changed file gets a section. Inside it, every changed function/type gets an entry. Anything else in the file lands in a mandatory "other changes" bucket.
-3. **Prose lives only in labelled slots with word budgets.** The agent fills each unit's `<Kind> Context:` and `Changes:` (slot keys `does`/`change`; a deleted unit's `Context:` is key `did`), the file-level `Context:`/`Changes:`, and bullets. Nothing else.
+3. **Prose lives only in labelled slots.** The agent fills each unit's `<Kind> Context:` and `Changes:` (slot keys `does`/`change`; a deleted unit's `Context:` is key `did`), the file-level `Context:`/`Changes:`, and bullets. Nothing else.
 4. **Descriptive, not justifying.** `Changes:` states what the code now does differently. "Why" is out of scope for v1 — the agent narrating its own work drifts into rationalizing.
 5. **Nothing is dropped.** If a change cannot be attributed to a function, it still appears with its hunk. If a language is unsupported, the whole file appears as one unit and says so. The one exception is deliberate: in an added file, the license header, package line and import lines are not shown as a change to review (§6.3).
 6. **Verifiable.** A lint confirms every slot is filled and the structure matches the skeleton.
@@ -87,7 +87,7 @@ git show <head>:<path> / worktree ┘         │
 
 - **extract** — deterministic. Runs preflight first (§4a; exit 2 on any missing dependency). Reads the existing brief if present (§15), produces `units.json` (the fact table) and `skeleton.md` (the brief with slots either empty or pre-filled from the previous brief). This step never calls a model.
 - **agent** — reads the brief, the full new-side source of each changed file, and writes prose into slots. May read other files for context. May not edit anything outside a slot.
-- **lint** — deterministic. Fails if any slot is empty, any heading was added/removed/reordered, or any word budget is exceeded. On failure the agent fixes and re-lints; the brief is not presented until lint passes.
+- **lint** — deterministic. Fails if any slot is empty, or any heading was added/removed/reordered. On failure the agent fixes and re-lints; the brief is not presented until lint passes.
 
 ## 6. Extraction algorithm
 
@@ -156,7 +156,7 @@ For every `modified` and `deleted` unit of kind `function`/`method`/`constructor
 - TS/JS: `call_expression` whose function is the identifier `name`, or a `member_expression` whose property is `name`; `new_expression` for classes.
 - Java: `method_invocation` whose name is `name`; `object_creation_expression` for constructors.
 
-Run as an ast-grep rule over the repo, restricted to the same language, excluding the unit's own definition. Result: a list of `path:line`, capped at 20 with a total count. This is **name-based, not type-resolved** — a common method name (`get`, `run`) will over-match. The list is labelled *Callers (by name)* so the reviewer knows what it is. Units with zero hits get `Callers: none found`.
+Run as an ast-grep rule over the repo, restricted to the same language, excluding the unit's own definition. Result: a list of `path:line`, capped at 20 with a total count. This is **name-based, not type-resolved** — a common method name (`get`, `run`) will over-match. The list is labelled *Callers (by name)* so the reviewer knows what it is. Two cheap corrections make the common wrong cases honest, and the line says when they applied: a declaration other files cannot call (a top-level function that is not `export`ed in TS/JS, a `private` member in Java, Kotlin or TS, an unexported name in Go) keeps only the sites that could reach it; and a file that declares the same name itself is taken to be calling its own, so its sites are dropped (`main` in three scripts lists one caller, not three). Units with zero hits get `Callers: none found`.
 
 Class-like units (`class`, `interface`, `enum`, `record`, `annotation`, `type`) are not called; they are referenced (`X.class`, `@X`, `new X(`, a type position). For those, extract runs `git grep` for the bare name across the repo (at the commit, or the working tree plus untracked files), skipping the declaring file and `import` lines, and labels the result *References (by name)* with the same cap and count.
 
@@ -191,7 +191,7 @@ The fact table the agent and the lint both read. One record per unit:
 | `oldSpan` / `newSpan` | `[start, end]` or null |
 | `signature` | the declaration on one line, cut at its body (§6.2) |
 | `hunk` | the diff text per §6.4 |
-| `callers` | `{ total, sites: ["path:line", …] }` per §6.5, or null |
+| `callers` | `{ total, sites: ["path:line", …], note? }` per §6.5, or null; `note` says which correction dropped sites |
 | `tags` | subset of `whitespace-only` `container-only` `unsupported-language` `generated` `binary` |
 | `hash` | sha256 prefix of the unit body (own lines only for container-only units and buckets) |
 | `badge` | `changed since last` / empty — the unit is not what the previous brief of the same work showed (absent then, or a different body) |
@@ -261,18 +261,18 @@ Add `rules/<lang>/*.yml` and a line in the language→extension map. No other ch
 >
 > </details>
 
-**Overview:** <one lead sentence, then a `- ` bullet per distinct part naming its files (3–8 sentences when there is one part) — SLOT, written after every file section is complete>
+**Overview:** <a concise lead line, then a concise bullet per distinct part naming its files (a short paragraph when there is one part) — SLOT, written last, from every file's Changes>
 
 ---
 
 ## [`src/orders/OrderService.java`](src/orders/OrderService.java) — modified
 <!-- rb:file path="…" hash="…" -->
 
-**File Context:** <1–2 sentences: what this file is responsible for — SLOT>
+**File Context:** <concise summary: what this file is responsible for — SLOT>
 
-**Changes:** <2–5 sentences or bullets: what the changes in this file are meant to accomplish, and which units below carry them — SLOT>
+**Changes:** <concise enumeration of the unit updates below and what they accomplish, written from the unit Changes — SLOT>
 
-**Review Observations:** <optional, ≤60 words — SLOT; the whole line is deleted when there is nothing to say>
+**Review Observations:** <optional, concise — SLOT; the whole line is deleted when there is nothing to say>
 
 **Other changes:**
 - `OrderService.java:1-4` (imports) — <1 line — SLOT>
@@ -285,9 +285,9 @@ Add `rules/<lang>/*.yml` and a line in the language→extension map. No other ch
 
 **Callers (by name):** [`OrderController.java:88`](…), [`BatchImport.java:141`](…) (2)   ← generated, immutable; **References (by name):** for class-like units
 
-**Method Context:** <≤40 words — SLOT; may say how the callers use it>
+**Method Context:** <concise summary — SLOT; may say how the callers use it>
 
-**Changes:** <≤60 words — SLOT>
+**Changes:** <concise summary — SLOT>
 
 **Review Observations:** <optional — SLOT>
 
@@ -297,7 +297,7 @@ Add `rules/<lang>/*.yml` and a line in the language→extension map. No other ch
 
 ### `validate(Order o)` — new · `OrderService.java:70-84`
 
-**Method Context:** <≤40 words — SLOT>
+**Method Context:** <concise summary — SLOT>
 
 ```diff
 <all lines +>
@@ -305,7 +305,7 @@ Add `rules/<lang>/*.yml` and a line in the language→extension map. No other ch
 
 ### `legacySave(Order o)` — deleted · was `OrderService.java:90-110`
 
-**Method Context:** <≤40 words — SLOT>
+**Method Context:** <concise summary — SLOT>
 
 ```diff
 <all lines ->
@@ -321,7 +321,7 @@ Add `rules/<lang>/*.yml` and a line in the language→extension map. No other ch
 **Changes:** <SLOT>
 
 <!-- rb:unit id="config/app.yaml#(file)" kind="file" status="modified" hash="…" -->
-- `config/app.yaml` (whole file; no unit rules for this file type) — <one line, ≤25 words — SLOT; an added file gets the fixed text `new file`>
+- `config/app.yaml` (whole file; no unit rules for this file type) — <one concise line — SLOT; an added file gets the fixed text `new file`>
 ```diff
 <full diff>
 ```
@@ -353,25 +353,23 @@ The brief, like a Graphite tour, is meant to be read top to bottom: summary → 
 
 Three levels, and a fixed order of work.
 
-**Order of work.** Fill every file section — `Context:`, `Changes:`, every unit's `Context:`/`Changes:`/`Context:` (past tense, deleted unit), every `other` line — **before** writing `Overview:`. The overview is a synthesis of the file sections, not a guess made before reading them; writing it last is what makes it accurate. The skeleton marks the slot `fill last`; SKILL.md places it as the final step before lint.
+**Order of work.** Build upward, and every slot instruction names its step. Step 1: within each file section, the unit slots — every unit's `Context:`/`Changes:`/`Context:` (past tense, deleted unit), every `other` line, unit observations. Step 2: the file's `Changes:` from its unit `Changes:` (what they add up to), its `Context:`, and file-wide observations. Step 3: `Overview:` from every file's `Changes:` and the `Context:` of added files. Each level is a synthesis of the level below, not a guess made before reading it; that order is what makes it accurate. The instructions ask for concise text, never a count, and lint enforces no length.
 
 **Change-set level — the thesis.**
-- `Overview:` — one lead sentence on what the whole change set accomplishes, then, when it has more than one distinct part, a `- ` bullet per part naming the files that carry it, with no blank line between the lead and the bullets (a blank line ends the slot; lint reports a list left outside it as STRUCTURE). Budget: lead ≤40 words and each bullet ≤60, so the total scales with the parts; the prose form for a single-part change set is 3–8 sentences, ≤200 words. Intent is expected here. Written last.
+- `Overview:` — a concise summary of all the changes, built from every file's `Changes:` and the `Context:` of added files: a concise lead line on what the whole change set accomplishes, then, when it has more than one distinct part, a concise bullet per part naming the files that carry it, with no blank line between the lead and the bullets (a blank line ends the slot; lint reports a list left outside it as STRUCTURE). A single-part change set is a short paragraph instead.
 
 **File level — the map. Intent is allowed here.**
-- `File Context:` — 1–2 sentences. What the file is responsible for, as it now stands.
-- `Changes:` — 2–5 sentences or bullets. What the changes in this file are **meant to accomplish**, and which units below carry them. Must name every unit in the section (lint checks). This is where "why" lives.
+- `File Context:` — concise summary. What the file is responsible for, as it now stands.
+- `Changes:` — from the unit `Changes:` below: a concise enumeration, in sentences or concise bullets, of the unit updates and what they **add up to**; a file with one unit gets a concise summary of what it adds up to, not a restatement. Must name every unit in the section (lint checks). This is where "why" lives.
 - Added files: no `Changes:` slot. `Context:` carries the intent ("what it is for, who uses it"); each new unit's `Context:` carries the intended use of that function.
 
-**Budgets count prose only.** Backticked spans — paths, identifiers, signatures — are the references the rules ask for and do not count toward any word budget.
-
 **Function level — the territory. Checkable against the hunk.**
-- `<Kind> Context:` (`Function Context:`, `Method Context:`, `Class Context:`, `Section Context:`, … from the unit's kind) — ≤40 words. The function as it now stands, for someone who has forgotten it exists. Present tense. May reference the generated callers line ("used by the controller and the batch importer to …").
-- `Review Observations:` — optional, ≤60 words, under every unit and file. Concrete, checkable things a reviewer should look at: unreachable or redundant code, unused leftovers, a missing case, behaviour the description does not explain. Omitted (line deleted) when there is nothing; never "none". Keeps `Context:`/`Changes:` purely descriptive. The agent may be reviewing its own code here, so it complements rather than replaces `/code-review`.
-- `Changes:` — ≤60 words. What the function now does that it did not, or no longer does — stated first, in terms the reviewer can verify by reading the hunk below. Name signature changes explicitly. A trailing clause on what the change is meant to accomplish is allowed *after* the behavioral description, never instead of it. If the intent and the code disagree, describe the code and say so.
-- `<Kind> Context:` (past tense, deleted unit) — ≤40 words. What the deleted function used to do; if the agent can see what replaced it, name the replacement.
+- `<Kind> Context:` (`Function Context:`, `Method Context:`, `Class Context:`, `Section Context:`, … from the unit's kind) — concise summary. The function as it now stands, for someone who has forgotten it exists. Present tense: what it does (a callable), says (a document section), or defines (anything else). May reference the generated callers line ("used by the controller and the batch importer to …").
+- `Review Observations:` — optional, concise, under every unit and file (at file level, file-wide only: anything about one unit goes under that unit). Concrete, checkable things a reviewer should look at: unreachable or redundant code, unused leftovers, a missing case, behaviour the description does not explain, a consequence the change accepts (something no longer checked, a caller that must change). Omitted (line deleted) when there is nothing; never "none". Keeps `Context:`/`Changes:` purely descriptive. The agent may be reviewing its own code here, so it complements rather than replaces `/code-review`.
+- `Changes:` — a concise summary, or a concise bullet per change when there is more than one (a list starts on the line after the label; extract and lint put it there). What the function now does that it did not, or no longer does (for a document section or doc unit: what it now says that it did not, or no longer says; for a non-callable unit such as a type, field, key or rule: what it now defines that it did not, or no longer defines) — stated first, in terms the reviewer can verify by reading the hunk below. Name signature changes explicitly. A trailing clause on what the change is meant to accomplish is allowed *after* the behavioral description, never instead of it. If the intent and the code disagree, describe the code and say so.
+- `<Kind> Context:` (past tense, deleted unit) — concise summary. What the deleted function used to do; if the agent can see what replaced it, name the replacement.
 - Write from the code, not from memory of intent. If the code and the intent disagree, describe the code.
-- **Concise and plain.** Declarative sentences; no preamble, hedging, or filler; never restate the heading ("This function…", "is responsible for"). Budgets are ceilings, not targets — most slots need one sentence. The skeleton carries this as a `**Style:**` line above the first slot, and lint reports `STYLE` for a short list of filler and heading-restating phrases.
+- **Concise and plain.** Declarative sentences; no preamble, hedging, or filler; never restate the heading ("This function…", "is responsible for"). The skeleton carries this as a `**Style:**` line above the first slot, and lint reports `STYLE` for a short list of filler and heading-restating phrases.
 - Do not editorialize, do not summarize quality, do not recommend. That is a different skill.
 
 ## 11. Decisions
@@ -398,7 +396,7 @@ Three levels, and a fixed order of work.
 - **Renamed file (`R`)**: git's rename detection (`-M`) pairs it. The brief has one section under the new path, its heading says `renamed from <old path>`, and the old content is read from the old path, so function-level attribution runs normally.
 - **Renamed unit**: a `deleted` and a `new` unit of the same kind are paired when the deleted body has at least two lines beyond its signature (braces and annotations aside) and, after a word-boundary swap of the old name for the new, ≥90% of its trimmed lines are identical. The pair is one `modified` unit with `renamed from` in its heading, listed under **Renamed** in the summary and excluded from **Signature changes**. Boilerplate bodies (`return true;`, `TODO()`) never pair.
 - **Moved function** (same name, different file): two units, one deleted in the old file and one new in the new file. Lint does not attempt to link them.
-- **Whitespace-only change** to a function: unit is kept, tagged `whitespace-only`; the agent may write `Changes:` as "formatting only" — the lint accepts that exact phrase under budget.
+- **Whitespace-only change** to a function: unit is kept, tagged `whitespace-only`; the agent may write `Changes:` as "formatting only" — the lint accepts that exact phrase.
 - **Generated files**: no special casing in v1. If a `.gitattributes` `linguist-generated` marker exists, extract tags the file `generated` and the file section collapses to the unsupported-language shape.
 - **Very large diffs** (>200 units): extract still completes; the agent fills slots file by file. Nothing is truncated. If this is unusable in practice, the fix is narrowing the range, not dropping units.
 - **New file**: every symbol in it is `new`; there is no old side. File section header says `added`.
@@ -428,7 +426,7 @@ pr-brief/
     extract.ts          # §6–7, §15; deps: git, ast-grep on PATH, node ≥ 22.18
     symbols.ts          # the symbol scanner shared by extract and the viewer server
     lint.ts             # §5 lint
-    brief-format.ts     # the brief parser and budgets shared by extract and lint
+    brief-format.ts     # the brief parser shared by extract and lint
     viewer.ts           # localhost server for the bundled editor (§18)
     selftest.sh         # fixture-based regression test
     e2e.mjs             # fixture-based browser test of the viewer (§18); optional, needs Playwright
@@ -597,8 +595,8 @@ The agent never reads this spec. Everything it needs is in the skeleton extract 
 - **Every slot is a unique, unmistakable token** carrying the unit id, so an edit cannot land in the wrong place and a slot cannot be confused with content:
 
   ```
-  **Method Context:** <<rb:does src/orders/OrderService.java#OrderService.save | ≤40 words, present tense: what this function does now; may cite the callers line above>>
-  **Changes:** <<rb:change src/orders/OrderService.java#OrderService.save | ≤60 words: what it now does that it did not, or no longer does — checkable against the hunk below; signature changes named; a trailing "meant to …" clause is allowed after the description>>
+  **Method Context:** <<rb:does src/orders/OrderService.java#OrderService.save | concise summary, present tense: what this function does now; may cite the callers line above>>
+  **Changes:** <<rb:change src/orders/OrderService.java#OrderService.save | concise summary: what it now does that it did not, or no longer does — checkable against the hunk below; signature changes named; a trailing "meant to …" clause is allowed after the description>>
   ```
 
   The instruction travels with the slot. The agent does not have to remember §10 three thousand lines into a file.
@@ -622,7 +620,6 @@ The agent is done when `lint` exits 0. Not "when the brief reads well." Lint out
 
 ```
 EMPTY   <<rb:change src/orders/OrderService.java#OrderService.save>>  — write it
-BUDGET  <<rb:does src/x.ts#parse>>  71 words > 40 — shorten
 LOCKED  src/y.ts#load Function Context: differs from previous brief — restore the previous text
 STYLE   <<rb:does src/z.ts#run>>  "This function" restates the heading — cut it
 MISSING file bullets for src/z.ts do not name unit `render`
@@ -689,7 +686,7 @@ Only these, all already required by §9 and §15: the front-matter gate line; `#
 ## 17. Open questions
 
 1. ~~Default threshold~~ — decided 2026-09-06: 150 lines or one-third changed (deleted units always show their whole old body).
-2. Should `field` (Java) and `type`/`interface` (TS) entries get `Context:` slots, or just the hunk? Default: `Context:` slot, ≤25 words.
+2. Should `field` (Java) and `type`/`interface` (TS) entries get `Context:` slots, or just the hunk? Default: `Context:` slot, concise.
 4. ~~Trivial accessors (getters/setters) as full units~~ — decided 2026-09-06: they stay ordinary units with a `Context:` slot; no tagging or folding. Reason: the unit layer is language-agnostic — the ast-grep rules say what a symbol is, and every symbol is treated the same; an accessor detector would be a per-language shape heuristic inside extraction. (Also, a constant-returning override that looks like a getter is exactly what a reviewer wants described.)
 3. ~~Untracked files in the working-tree case~~ — resolved 2026-09-06: included by default, `--no-untracked` excludes them.
 4. Runtime for the scripts: Node/TypeScript (matches your stack) vs Bash+jq. Default: TypeScript, run with `node` or `bun`.

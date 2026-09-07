@@ -42,8 +42,7 @@ Working-tree modes brief untracked files too (`.gitignore` respected; `--no-untr
    writes the skeleton to `pr-brief-<key>.md` with `<<rb:… | instruction>>` slots.
 2. The agent fills the slots, one Edit each, following the instruction inside
    each slot.
-3. `scripts/lint.ts` — deterministic. Checks every slot is filled, budgets
-   hold, structure is untouched, carried-over text and reviewer `**Notes:**`
+3. `scripts/lint.ts` — deterministic. Checks every slot is filled, structure is untouched, carried-over text and reviewer `**Notes:**`
    are unchanged; strips revision notes; archives the clean brief beside it.
 
 The brief is its own cache: front matter records base/head/snapshot, and an

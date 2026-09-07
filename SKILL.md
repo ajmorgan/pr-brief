@@ -68,30 +68,36 @@ not in the listed files.
 A slot looks like this:
 
 ```
-**Function Context:** <<rb:does src/x.ts#parse | ≤40 words, present tense: what this function does now>>
+**Function Context:** <<rb:does src/x.ts#parse | concise summary, present tense: what this function does now>>
 ```
 
 Everything between `<<` and `>>` is one slot: an id, a `|`, and the
 instruction for that slot. Replace the entire `<<…>>` with your text,
-following the instruction inside it. Work top to bottom through the file
-sections. Use Edit with the exact `<<rb:… | …>>` string as the match; each
+following the instruction inside it. Build upward; every instruction names
+its step: step 1 the unit slots of a file, step 2 that file's `Changes:`
+from them (and its `Context:`), step 3 the `Overview:` from every file's
+`Changes:` and the `Context:` of added files. Use Edit with the exact `<<rb:… | …>>` string as the match; each
 one is unique.
 
 Rules for every slot:
 
-1. Write only what the slot's own instruction asks for, within its word budget.
-   Be concise and plain: declarative sentences, no preamble, no hedging, no
-   filler, never restate the heading ("This function…"). Budgets are ceilings;
-   most slots need one sentence.
+1. Write only what the slot's own instruction asks for. Be concise and plain:
+   declarative sentences, no preamble, no hedging, no filler, never restate
+   the heading ("This function…").
 2. A unit's `… Context:` / `Changes:` describe the code as it is in the hunk below
    the slot. If the intent and the code disagree, describe the code and say
    so in one clause.
-3. A unit's `Changes:` states the behavioural difference first. A trailing clause on
-   what it is meant to accomplish is allowed after that, never instead of it.
-4. A file's `Changes:` must name every unit the instruction lists.
+3. A unit's `Changes:` states the behavioural difference first (for a document
+   section: what it now says; for a type, field, key or rule: what it now
+   defines), as a concise summary, or a concise bullet per change when there is more
+   than one. A trailing clause on what it is meant to accomplish is allowed
+   after that, never instead of it.
+4. A file's `Changes:` is built from the unit `Changes:` below it and must
+   name every unit the instruction lists.
    `Review Observations:` is optional: write only something concrete a
    reviewer should check (unreachable or redundant code, an unused leftover,
-   a missing case, behaviour the description does not explain). If there is
+   a missing case, behaviour the description does not explain, a consequence
+   the change accepts). If there is
    nothing, delete that whole line. Never write "none". Keep `… Context:` and
    `Changes:` purely descriptive; judgments go here.
 5. A `<!-- rb:revise … -->` block under a slot means the code changed since
@@ -102,9 +108,10 @@ Rules for every slot:
    previous brief and is locked. Do not edit it.
 7. `**Notes:**` lines are the reviewer's. Never edit, move, or remove them.
 
-Fill `**Overview:**` last, after every file section is complete. It is at the
+Fill `**Overview:**` last, from every file's `Changes:`, after every file
+section is complete. It is at the
 top of the file and its slot says `fill LAST`. A change set with several
-distinct parts gets one lead sentence and then a `- ` bullet per part,
+distinct parts gets a concise lead line and then a concise bullet per part,
 directly under the lead with no blank line, each naming its files.
 
 Do not:
@@ -127,7 +134,7 @@ node ~/.claude/skills/pr-brief/scripts/lint.ts <path>
 - Exit **0**: it printed `lint clean`. Go to Step 5.
 - Exit **1**: it printed one line per problem, each starting with a code and
   ending with the fix. Do exactly what each line says, then run lint again.
-  Codes: `EMPTY` write the slot · `BUDGET` shorten to the limit · `MISSING`
+  Codes: `EMPTY` write the slot · `MISSING`
   name the unit in the file's Changes · `LOCKED` restore the carried-over
   text · `NOTES` restore the reviewer's note · `STYLE` cut the quoted filler
   phrase · `STRUCTURE` restore the

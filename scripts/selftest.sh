@@ -286,6 +286,26 @@ case "$out" in "wrote $FX/.git/pr-brief/$sha/pr-brief-$sha.md:"*) ;; *) echo "FA
 out="$(node "$SK/scripts/extract.ts" --key "my stack/v2" --path src/Over.java)"
 case "$out" in "wrote $FX/.git/pr-brief/my-stack-v2/pr-brief-my-stack-v2.md:"*) ;; *) echo "FAIL: --key not sanitised into the brief's name: $out"; exit 1 ;; esac
 
+# --- callers by name: module privacy and same-name declarations -----------------------------
+# two scripts each declare and call their own run(); a not-exported run() lists only its own file's call.
+# an exported helper called from another file keeps that caller.
+mkdir -p src/cli && cat > src/cli/a.ts <<'EOF3'
+export function shared(x: number): number { return x + 1; }
+function run(): void { console.log(shared(1)); }
+run();
+EOF3
+cat > src/cli/b.ts <<'EOF3'
+import { shared } from "./a.ts";
+function run(): void { console.log(shared(2)); }
+run();
+EOF3
+git add -A && git commit -qm "cli scripts"
+sedi 's/return x + 1;/return x + 2;/; s/console.log(shared(1));/console.log(shared(1) + 1);/' src/cli/a.ts
+callers="$(node "$SK/scripts/extract.ts" --list --path src/cli | awk -F'  +' '{ print $3, $6 }')"
+case "$callers" in *"src/cli/a.ts#run callers=1"*) ;; *) echo "FAIL: a not-exported run() should list only its own file's call: $callers"; exit 1 ;; esac
+case "$callers" in *"src/cli/a.ts#shared callers=2"*) ;; *) echo "FAIL: an exported helper should keep its cross-file caller: $callers"; exit 1 ;; esac
+git -C "$FX" checkout -q -- src/cli
+
 # --- worktrees: state lives under the common git directory ------------------------------------
 # a linked worktree: its .git is a file pointing into the main repository's .git, which is where the brief goes
 WT="$(dirname "$FX")/wt" && git worktree add -q -b wt-branch "$WT" HEAD

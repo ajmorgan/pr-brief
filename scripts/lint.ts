@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { FORMAT_VERSION, BUDGETS, SHORT_KINDS, parseBrief, isToken, wordCount, stripReviseNotes, labelOf, overviewParts } from "./brief-format.ts";
+import { FORMAT_VERSION, parseBrief, isToken, stripReviseNotes, labelOf, listOnNextLine } from "./brief-format.ts";
 
 const STALE_PREFIX = "*(code changed since this note)*";
 // Concise-style check (spec §10): phrases that restate the heading or pad the sentence.
@@ -76,12 +76,6 @@ function main(): void {
   if (brief.overview === null) P("EMPTY", "**Overview:**", "the Overview line is missing — restore `**Overview:** …` under the summary block");
   else if (!isToken(brief.overview)) {
     if (state.overviewLocked && brief.overview !== state.overviewLocked) P("LOCKED", "**Overview:**", "differs from the previous brief although nothing changed — restore the previous text");
-    const ov = overviewParts(brief.overview);
-    if (ov.bullets.length) {
-      // list form: the lead and each bullet are budgeted on their own, so the total scales with the parts
-      if (wordCount(ov.lead) > BUDGETS.overviewLead) P("BUDGET", "**Overview:** lead", `${wordCount(ov.lead)} words > ${BUDGETS.overviewLead} — shorten the lead sentence`);
-      ov.bullets.forEach((b, i) => { if (wordCount(b) > BUDGETS.overviewBullet) P("BUDGET", `**Overview:** bullet ${i + 1}`, `${wordCount(b)} words > ${BUDGETS.overviewBullet} — shorten`); });
-    } else if (wordCount(brief.overview) > BUDGETS.overview) P("BUDGET", "**Overview:**", `${wordCount(brief.overview)} words > ${BUDGETS.overview} — shorten`);
     if (!state.overviewLocked) { const st = styleProblem(brief.overview); if (st) P("STYLE", "**Overview:**", `${st} is filler — cut it`); }
   }
 
@@ -92,15 +86,14 @@ function main(): void {
     if (s.scope === "file") {
       const f = files.get(s.path);
       if (!f) continue; // structure error already reported
-      const fileSlots: [string, number][] = s.status === "A" ? [["purpose", BUDGETS.purpose]] : [["purpose", BUDGETS.purpose], ["changes", BUDGETS.changes]];
-      for (const [key, budget] of fileSlots) {
+      const fileSlots = s.status === "A" ? ["purpose"] : ["purpose", "changes"];
+      for (const key of fileSlots) {
         const v = f.slots[key];
         if (v === undefined) { P("EMPTY", `${labelOf(key)} ${s.path}`, "label line is missing — restore it and write the text"); continue; }
         if (isToken(v)) continue;
-        // carried-over text is locked as it was: neither the budget nor the style rule applies to it, or
-        // the agent could be told both to shorten it and to restore it
+        // carried-over text is locked as it was: the style rule does not apply to it, or the agent could be
+        // told both to change it and to restore it
         if (s.slots[key]?.locked && v !== s.slots[key].text) P("LOCKED", `${labelOf(key)} ${s.path}`, "carried-over text was changed — restore the previous text");
-        if (!s.slots[key]?.locked && wordCount(v) > budget) P("BUDGET", `${labelOf(key)} ${s.path}`, `${wordCount(v)} words > ${budget} — shorten`);
         if (!s.slots[key]?.locked) { const st = styleProblem(v); if (st) P("STYLE", `${labelOf(key)} ${s.path}`, `${st} is filler or restates the heading — cut it`); }
       }
       const ch = f.slots.changes;
@@ -111,17 +104,13 @@ function main(): void {
     }
     const u = units.get(s.id);
     if (!u) continue;
-    const want: [string, number][] = s.kind === "other" || s.kind === "file" ? [["other", BUDGETS.other]]
-      : s.status === "deleted" ? [["did", BUDGETS.did]]
-      : s.status === "new" ? [["does", SHORT_KINDS.has(s.kind) ? BUDGETS.short : BUDGETS.does]]
-      : [["does", SHORT_KINDS.has(s.kind) ? BUDGETS.short : BUDGETS.does], ["change", BUDGETS.change]];
-    for (const [key, budget] of want) {
+    const want = s.kind === "other" || s.kind === "file" ? ["other"] : s.status === "deleted" ? ["did"] : s.status === "new" ? ["does"] : ["does", "change"];
+    for (const key of want) {
       const v = u.slots[key];
       const label = key === "other" ? `- … ${s.id}` : `${labelOf(key === "does" && s.status === "deleted" ? "did" : key, s.kind)} ${s.id}`;
       if (v === undefined || v === "") { P("EMPTY", label, key === "other" ? "text after the ` — ` is missing — write it" : "label line is missing — restore it and write the text"); continue; }
       if (isToken(v)) continue;
       if (s.slots[key]?.locked && v !== s.slots[key].text) P("LOCKED", label, "carried-over text was changed — restore the previous text");
-      if (!s.slots[key]?.locked && wordCount(v) > budget && !(key === "change" && v.trim() === "formatting only")) P("BUDGET", label, `${wordCount(v)} words > ${budget} — shorten`);
       if (!s.slots[key]?.locked) { const st = styleProblem(v); if (st) P("STYLE", label, `${st} is filler or restates the heading — cut it`); }
     }
     checkReview(u.slots.review, s.slots.review, `**Review Observations:** ${s.id}`);
@@ -131,14 +120,13 @@ function main(): void {
     }
   }
 
-  // Review Observations is optional: the line may be deleted; if present it must be prose within budget
+  // Review Observations is optional: the line may be deleted; if present it must be prose
   function checkReview(v: string | undefined, locked: { locked: boolean; text: string } | undefined, label: string) {
     if (v === undefined) { if (locked?.locked && locked.text) P("LOCKED", label, "carried-over observations were removed — restore them"); return; }
     if (v === "" ) { P("EMPTY", label, "either write an observation or delete the whole line"); return; }
     if (isToken(v)) return; // reported as EMPTY by the token scan
     if (/^\W*(none|n\/a|nothing( to (note|report|observe|say))?|no (observations?|issues?|concerns?|notes?)|nil)\b\W*$/i.test(v)) { P("EMPTY", label, "'none' is not an observation — delete the whole line"); return; }
     if (locked?.locked && locked.text && v !== locked.text) P("LOCKED", label, "carried-over text was changed — restore the previous text");
-    if (!locked?.locked && wordCount(v) > BUDGETS.review) P("BUDGET", label, `${wordCount(v)} words > ${BUDGETS.review} — shorten`);
     if (!locked?.text) { const st = styleProblem(v); if (st) P("STYLE", label, `${st} is filler — cut it`); }
   }
 
@@ -146,7 +134,7 @@ function main(): void {
     process.stdout.write(problems.join("\n") + `\n\n${problems.length} problem${problems.length === 1 ? "" : "s"}. Fix each line above, then run lint again.\n`);
     process.exit(1);
   }
-  const cleaned = stripReviseNotes(text).replace(/\n{3,}/g, "\n\n");
+  const cleaned = listOnNextLine(stripReviseNotes(text)).replace(/\n{3,}/g, "\n\n"); // a list value goes on the line after its label
   if (cleaned !== text) fs.writeFileSync(outAbs, cleaned);
   // archive the clean brief beside its state, and every (id@hash) → prose in the repository-wide cache,
   // so switching modes, briefing under another key, or reverting code never loses prose

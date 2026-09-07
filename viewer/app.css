@@ -251,9 +251,10 @@ brief-outline {
 .markdown-body .diff-del .diff-marker { color: var(--syn-invalid, #e06c75); }
 .markdown-body .diff-hunk { color: var(--muted); font-style: italic; }
 
-/* Side-by-side hunks: a two-column grid; both columns scroll together. */
-.markdown-body code.diff-split { display: grid; grid-template-columns: repeat(2, minmax(50%, max-content)); overflow-x: auto; }
-.markdown-body .diff-cell { display: block; white-space: pre; padding: 0 0.6em 0 0.4em; min-width: 0; }
+/* Side-by-side hunks: a two-column grid of equal halves. Long lines wrap inside their cell (a minmax(50%, max-content)
+   track only grows when there is free space, so an over-long line used to spill across into the other column). */
+.markdown-body code.diff-split { display: grid; grid-template-columns: 1fr 1fr; }
+.markdown-body .diff-cell { display: block; white-space: pre-wrap; overflow-wrap: anywhere; padding: 0 0.6em 0 0.4em; min-width: 0; }
 .markdown-body .diff-cell:nth-child(odd) { border-right: 1px solid var(--border); }
 .markdown-body .diff-cell.diff-span2 { grid-column: 1 / -1; border-right: none; }
 .markdown-body .diff-empty { background: color-mix(in srgb, var(--muted) 8%, transparent); }

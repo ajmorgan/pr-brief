@@ -1,26 +1,10 @@
-// brief-format.ts — shared parsing of PR_BRIEF.md for extract and lint.
+// brief-format.ts — shared parsing of a brief for extract and lint.
 // The brief is line-oriented Markdown. Structure comes from headings and
 // `<!-- rb:… -->` markers; prose lives in labelled slots whose value is the
 // paragraph starting at the label and ending at the first blank line.
 
 export const FORMAT_VERSION = 1;
 
-// Word budgets per slot (spec §10). `short` applies to non-function kinds.
-export const BUDGETS: Record<string, number> = {
-  overview: 200, // prose form; the list form is budgeted per line: overviewLead for the lead sentence, overviewBullet per bullet
-  overviewLead: 40,
-  overviewBullet: 60,
-  purpose: 60,
-  changes: 150,
-  does: 40,
-  did: 40,
-  change: 60,
-  other: 25,
-  short: 25,
-  review: 60,
-};
-
-export const SHORT_KINDS = new Set(["type", "interface", "enum", "field", "class", "record", "annotation", "object", "namespace", "key", "item", "doc", "rule", "element", "script", "style", "block"]);
 export const CALLABLE_KINDS = new Set(["function", "method", "constructor", "arrow"]);
 
 // Slot labels. A file's description is "File Context:"; a unit's is "<Kind> Context:" for its kind
@@ -130,23 +114,23 @@ function readSlot(lines: string[], i: number, label: string): { value: string; n
   return { value: parts.join("\n").trim(), next: j };
 }
 
+// A slot value that is a list must start on the line after its label, or Markdown renders the first bullet as
+// paragraph text. Both parsers read such a value the same way; this puts it there. Fence-aware.
+export function listOnNextLine(text: string): string {
+  let fence = 0;
+  return text.split("\n").flatMap((l) => {
+    const fm = l.match(/^(`{3,})/);
+    if (fence === 0 && fm) { fence = fm[1].length; return [l]; }
+    if (fence > 0) { if (fm && fm[1].length >= fence && l.trim() === fm[1]) fence = 0; return [l]; }
+    const m = l.match(/^(\*\*[^*\n]+:\*\*) (- .*)$/);
+    return m ? [m[1], m[2]] : [l];
+  }).join("\n");
+}
+
 export function isToken(v: string | undefined): boolean {
   return !!v && v.startsWith("<<rb:");
 }
 
-// Backticked spans — paths, identifiers, signatures — are references the rules ask for, not prose;
-// they do not count toward a budget.
-export function wordCount(s: string): number {
-  return s.replace(/`[^`\n]*`/g, " ").split(/\s+/).filter((w) => w.length > 0).length;
-}
-
-/** The Overview split into its lead sentence and `- ` bullets (bullets empty for the prose form). */
-export function overviewParts(overview: string): { lead: string; bullets: string[] } {
-  const lines = overview.split("\n");
-  const first = lines.findIndex((l) => /^\s*- /.test(l));
-  if (first < 0) return { lead: overview, bullets: [] };
-  return { lead: lines.slice(0, first).join("\n"), bullets: lines.slice(first).join("\n").split(/\n(?=\s*- )/).map((b) => b.replace(/^\s*- /, "")) };
-}
 
 export function parseBrief(text: string): ParsedBrief {
   const lines = text.split("\n");

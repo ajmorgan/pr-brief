@@ -11,7 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { FORMAT_VERSION, BUDGETS, SHORT_KINDS, CALLABLE_KINDS, parseBrief, isToken, labelOf } from "./brief-format.ts";
+import { FORMAT_VERSION, CALLABLE_KINDS, parseBrief, isToken, labelOf, listOnNextLine } from "./brief-format.ts";
 import type { ParsedBrief } from "./brief-format.ts";
 import { SKILL_DIR, scanSymbols as scanSymbolsOrThrow, signatureOf, symKey, qualName, paramsOf, innermost, displayName } from "./symbols.ts";
 import type { Sym } from "./symbols.ts";
@@ -37,7 +37,7 @@ interface Unit {
   oldSpan: [number, number] | null; newSpan: [number, number] | null;
   signature: string; oldSignature: string | null; display: string;
   newLines: Set<number>; oldLines: Set<number>;
-  hunk: string; callers: { total: number; sites: string[] } | null;
+  hunk: string; callers: { total: number; sites: string[]; note?: string } | null;
   tags: string[]; hash: string; badge: string; renamedFrom: string | null; col: number;
   slots: Record<string, { locked: boolean; text: string }>;
   revise: string | null; notes: string | null;
@@ -498,9 +498,9 @@ function renderHunk(f: FileEntry, u: Unit, fullFnMax: number): string {
 // ---------------------------------------------------------------- callers (§6.5)
 
 function findCallers(sg: string, files: FileEntry[], rev: string | null): void {
-  const targets: { u: Unit; lang: string }[] = [];
+  const targets: { u: Unit; f: FileEntry; lang: string }[] = [];
   // a language with no call syntax to search (bash, html, css, yaml, markdown) gets no Callers line at all
-  for (const f of files) for (const u of f.units) if (f.lang && CALLER_LANGS[f.lang]?.length && CALLABLE_KINDS.has(u.kind) && u.status !== "new") targets.push({ u, lang: f.lang });
+  for (const f of files) for (const u of f.units) if (f.lang && CALLER_LANGS[f.lang]?.length && CALLABLE_KINDS.has(u.kind) && u.status !== "new") targets.push({ u, f, lang: f.lang });
   // a constructor is called by its class name; `new` exists in Java/TS/JS only
   const ctorName = (u: Unit) => (u.name === "constructor" ? u.scope.split(".").pop() ?? u.name : u.name);
   const hasNew = (lang: string) => lang === "java" || lang === "typescript" || lang === "tsx" || lang === "javascript";
@@ -508,9 +508,8 @@ function findCallers(sg: string, files: FileEntry[], rev: string | null): void {
   if (rev) {
     // historical commit: the working tree may be far ahead, so search the commit's tree by name with git grep
     const exts = Object.keys(LANG_BY_EXT);
-    for (const { u } of targets) {
+    for (const { u, f, lang } of targets) {
       // POSIX ERE (no \b): a name not preceded by an identifier character
-      const lang = targets.find((t) => t.u === u)!.lang;
       const pat = u.kind === "constructor" ? (hasNew(lang) ? `new[[:space:]]+${ctorName(u)}[[:space:]]*\\(` : `(^|[^A-Za-z0-9_$.])${ctorName(u)}[[:space:]]*\\(`) : `(^|[^A-Za-z0-9_$])${u.name}[[:space:]]*\\(`;
       const out = gitOk(["grep", "-n", "-E", pat, rev, "--", SCOPE]) ?? "";
       const sites = new Set<string>();
@@ -521,8 +520,8 @@ function findCallers(sg: string, files: FileEntry[], rev: string | null): void {
         if (m[1] === u.path && u.newSpan && ln >= u.newSpan[0] && ln <= u.newSpan[1]) continue; // self
         sites.add(`${m[1]}:${ln}`);
       }
-      const sorted = [...sites].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-      u.callers = { total: sorted.length, sites: sorted.slice(0, CALLER_CAP) };
+      const r = restrictSites(u, f, lang, sites, rev);
+      u.callers = { total: r.sites.length, sites: r.sites.slice(0, CALLER_CAP), note: r.note };
     }
     return;
   }
@@ -549,10 +548,62 @@ function findCallers(sg: string, files: FileEntry[], rev: string | null): void {
       sitesById.get(u.id)!.add(`${file}:${line}`);
     }
   }
-  for (const { u } of targets) {
-    const sites = [...(sitesById.get(u.id) ?? [])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    u.callers = { total: sites.length, sites: sites.slice(0, CALLER_CAP) };
+  for (const { u, f, lang } of targets) {
+    const r = restrictSites(u, f, lang, sitesById.get(u.id) ?? new Set<string>(), null);
+    u.callers = { total: r.sites.length, sites: r.sites.slice(0, CALLER_CAP), note: r.note };
   }
+}
+
+// Name matching cannot tell which `main` a call binds to. Two cheap corrections make the common wrong
+// cases honest: a declaration that other files cannot call (not exported in TS/JS, private in Java, Kotlin
+// or TS, unexported in Go) keeps only the sites that could reach it; and a file that declares the same
+// name itself is taken to be calling its own, so its sites are dropped. Both are said on the Callers line.
+const DECL_RE: Record<string, (n: string) => RegExp> = {
+  typescript: (n) => new RegExp(`^\\s*(export\\s+(default\\s+)?)?(async\\s+)?function\\s*\\*?\\s*${n}\\s*[(<]|^\\s*(export\\s+)?(const|let|var)\\s+${n}\\b|^\\s+(public|private|protected|static|async|readonly|override|\\s)*${n}\\s*\\(`, "m"),
+  java: (n) => new RegExp(`\\b${n}\\s*\\([^;{]*\\)\\s*(throws[^{;]*)?\\{`),
+  kotlin: (n) => new RegExp(`\\bfun\\s+(<[^>]*>\\s*)?([\\w.]+\\.)?${n}\\s*\\(`),
+  go: (n) => new RegExp(`^func\\s+(\\([^)]*\\)\\s*)?${n}\\s*[(\\[]`, "m"),
+  python: (n) => new RegExp(`^\\s*(async\\s+)?def\\s+${n}\\s*\\(`, "m"),
+  lua: (n) => new RegExp(`\\bfunction\\s+([\\w.:]+[.:])?${n}\\s*\\(|\\b${n}\\s*=\\s*function\\b`),
+};
+DECL_RE.tsx = DECL_RE.typescript; DECL_RE.javascript = DECL_RE.typescript;
+const fileTextCache = new Map<string, string>();
+function fileText(p: string, rev: string | null): string {
+  const key = `${rev ?? "wt"}:${p}`;
+  if (!fileTextCache.has(key)) {
+    let s = "";
+    if (rev) s = gitOk(["show", `${rev}:${p}`]) ?? "";
+    else { try { s = fs.readFileSync(path.join(ROOT, p), "utf8"); } catch { s = ""; } }
+    fileTextCache.set(key, s);
+  }
+  return fileTextCache.get(key)!;
+}
+function restrictSites(u: Unit, f: FileEntry, lang: string, raw: Set<string>, rev: string | null): { sites: string[]; note?: string } {
+  const notes: string[] = [];
+  let sites = [...raw];
+  const fileOf = (s: string) => s.slice(0, s.lastIndexOf(":"));
+  const decl = (f.newContent ?? "").split("\n")[(u.newSpan?.[0] ?? 1) - 1] ?? "";
+  const topLevel = !u.scope;
+  const jsLike = lang === "typescript" || lang === "tsx" || lang === "javascript";
+  // 1. a declaration other files cannot call
+  let reach: "file" | "dir" | null = null;
+  if (jsLike && topLevel && !/^\s*export\b/.test(decl)) reach = "file";
+  else if ((jsLike || lang === "java" || lang === "kotlin") && /\bprivate\b/.test(decl)) reach = "file";
+  else if (lang === "go" && topLevel && /^[a-z]/.test(u.name)) reach = "dir";
+  if (reach) {
+    const before = sites.length;
+    sites = sites.filter((s) => (reach === "file" ? fileOf(s) === u.path : path.dirname(fileOf(s)) === path.dirname(u.path)));
+    if (sites.length < before) notes.push(reach === "file" ? "not reachable from other files, their calls dropped" : "unexported, calls outside the package dropped");
+  }
+  // 2. a file that declares the same name is calling its own
+  const re = DECL_RE[lang]?.(u.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (re) {
+    const others = new Set<string>();
+    sites = sites.filter((s) => { const p = fileOf(s); if (p === u.path || !re.test(fileText(p, rev))) return true; others.add(path.basename(p)); return false; });
+    if (others.size) notes.push(`${u.name} is also declared in ${[...others].join(", ")}, their calls dropped`);
+  }
+  sites.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return { sites, note: notes.length ? notes.join("; ") : undefined };
 }
 
 // Class-like units (class, interface, enum, record, annotation, type) are not
@@ -590,6 +641,9 @@ function briefKey(a: Args, R: RangeInfo): { key: string; shown: string } {
   const shown = branch || git(["rev-parse", "--short=7", "HEAD"]).trim();
   return { key: keyOf(shown), shown };
 }
+
+// The observation instruction, shared by the file-level and unit-level slots (the level's prefix differs).
+const REVIEW_TAIL = "something a careful reader should check — dead or redundant code, an unused leftover, a missing case, unexplained behaviour, a consequence the change accepts. Concrete and checkable only; delete this line if there is nothing.";
 
 // ---------------------------------------------------------------- previous brief (§15)
 
@@ -926,8 +980,8 @@ function main(): void {
   L.push(q(`**Read these before filling any slot**${atRev ? ` — at commit \`${atRev}\`, with \`git show ${atRev}:<path>\`, not from the working tree` : ""}:`), q(""));
   const toRead = files.filter((f) => f.status !== "D").map((f) => `\`${f.path}\``);
   L.push(...(toRead.length ? toRead.map((p) => q(`- ${p}`)) : [q("- (none)")]), q(""));
-  L.push(q(`**Style:** concise and plain. Declarative sentences; no preamble, hedging, or filler; never restate the heading ("This function…"). Word budgets are ceilings, not targets — most slots need one sentence.`), q(""), q("</details>"), "");
-  L.push(`**Overview:** ${overviewLocked ?? "<<rb:overview | fill LAST, after every file section below is complete. one lead sentence on what the whole change set accomplishes, then, when it has more than one distinct part, a `- ` bullet per part naming the files that carry it (no blank line between lead and bullets); a single-part change set is 3–8 sentences instead, naming the files or groups of files that carry each piece.>>"}`, "");
+  L.push(q(`**Style:** concise and plain. Declarative sentences; no preamble, hedging, or filler; never restate the heading ("This function…"). Build upward, and every slot names its step: step 1 the unit slots of a file, step 2 that file's Context, Changes and observations from its units, step 3 the Overview from every file.`), q(""), q("</details>"), "");
+  L.push(`**Overview:** ${overviewLocked ?? "<<rb:overview | step 3, fill LAST, after every file section below is complete, from every file's Changes and the Context of added files: a concise summary of all the changes. A concise lead line on what the whole change set accomplishes, then, when it has more than one distinct part, a concise bullet per part naming the files that carry it (no blank line between lead and bullets); a single-part change set is a short paragraph instead, naming the files or groups of files that carry each piece.>>"}`, "");
   if (!overviewLocked && prev?.overview && !isToken(prev.overview)) {
     const changed = files.flatMap((f) => f.units.filter((u) => u.badge).map((u) => `${u.id} (${u.badge})`));
     const removed = prev ? [...prevUnits.keys()].filter((id) => !files.some((f) => f.units.some((u) => u.id === id))).map((id) => `${id} (removed)`) : [];
@@ -952,10 +1006,10 @@ function main(): void {
     if (f.binary) { L.push(`Binary file; ${statusWord}. No units.`, ""); continue; }
     // Changes: must name every unit except tests (their titles are long and they are listed just below) and buckets
     const unitNames = f.units.filter((u) => u.kind !== "other" && u.kind !== "file" && u.kind !== "test").map((u) => u.name);
-    L.push(`${labelOf("purpose")} ${f.slots.purpose?.text ?? `<<rb:purpose ${f.path} | 1–2 sentences: what this file is responsible for, as it now stands${f.status === "D" ? " (past tense: it was deleted)" : f.status === "A" ? " — the file is new; say what it is for and who is expected to use it" : ""}>>`}`, "");
+    L.push(`${labelOf("purpose")} ${f.slots.purpose?.text ?? `<<rb:purpose ${f.path} | step 2, after this file's unit slots: concise summary: what this file is responsible for, as it now stands${f.status === "D" ? " (past tense: it was deleted)" : f.status === "A" ? " — the file is new; say what it is for and who is expected to use it" : ""}>>`}`, "");
     // an added file has no "before": Purpose only (its units are all new and get Purpose: only)
-    if (f.status !== "A") L.push(`**Changes:** ${f.slots.changes?.text ?? `<<rb:changes ${f.path} | 2–5 sentences or bullets: what the changes in this file are meant to accomplish. Must name every unit below${unitNames.length ? ": " + unitNames.join(", ") : ""}>>`}`, "");
-    if (f.slots.review?.text !== "") { const slot = f.slots.review?.text, id = f.path; L.push(`**Review Observations:** ${slot ?? `<<rb:review ${id} | optional, ≤60 words: what a careful reader should check — unreachable or redundant code, unused leftovers, a missing case, behaviour the text above does not explain. Concrete and checkable only. Delete this whole line if there is nothing to say.>>`}`, ""); }
+    if (f.status !== "A") L.push(`**Changes:** ${f.slots.changes?.text ?? `<<rb:changes ${f.path} | step 2, after every unit slot in this file, from the unit Changes below: a concise enumeration, in sentences or concise bullets, of the unit updates and what they add up to; when the file has one unit, a concise summary of what it adds up to, not a restatement. Must name every unit below${unitNames.length ? ": " + unitNames.join(", ") : ""}>>`}`, "");
+    if (f.slots.review?.text !== "") { const slot = f.slots.review?.text, id = f.path; L.push(`**Review Observations:** ${slot ?? `<<rb:review ${id} | step 2, optional, concise, file-wide only (anything about one unit goes under that unit): ${REVIEW_TAIL}>>`}`, ""); }
     if (f.revise || f.purposeRevise) L.push(`<!-- rb:revise ${f.path}`, [f.purposeRevise, f.revise].filter(Boolean).join("\n"), "-->", "");
     if (f.notes) L.push(`**Notes:** ${f.notes}`, "");
     slotIndex.push({ scope: "file", path: f.path, status: f.status, slots: f.slots, unitNames, notes: f.notes });
@@ -972,7 +1026,7 @@ function main(): void {
         const loc = u.newSpan ? link(`${path.basename(f.path)}:${spanText(u.newSpan, u.newLines)}`, f.path, u.newSpan[0]) : u.oldSpan ? `\`was ${path.basename(f.path)}:${spanText(u.oldSpan, u.oldLines)}\`` : link(path.basename(f.path), f.path);
         const label = u.kind === "file" ? (f.tags.includes("generated") ? "(generated file; not shown)" : `(whole file; no unit rules for ${path.extname(f.path) || "this file type"})`) : u.name;
         // a whole new file with no unit rules has nothing to say beyond the file's Purpose: no slot
-        const otherText = u.slots.other?.text ?? (u.kind === "file" && u.status === "new" ? "new file" : `<<rb:other ${u.id} | one line, ≤25 words: what changed here>>`);
+        const otherText = u.slots.other?.text ?? (u.kind === "file" && u.status === "new" ? "new file" : `<<rb:other ${u.id} | step 1: one concise line: what changed here>>`);
         L.push(`- ${loc} ${label}${u.badge ? ` · ${u.badge}` : ""} — ${otherText}`);
         if (u.revise) L.push(`<!-- rb:revise ${u.id}`, u.revise, "-->");
         L.push(...fence(u.hunk), "");
@@ -981,6 +1035,10 @@ function main(): void {
     }
     for (const u of f.units) {
       if (u.kind === "other" || u.kind === "file") continue;
+      // the verb a unit's slots ask about: a callable does, a document says, everything else (a type, field, key, rule, …) defines
+      const verbs = u.kind === "section" || u.kind === "doc" ? { now: "says now", past: "used to say", change: "what it now says that it did not, or no longer says" }
+        : CALLABLE_KINDS.has(u.kind) ? { now: "does now", past: "used to do", change: "what it now does that it did not, or no longer does" }
+        : { now: "defines now", past: "used to define", change: "what it now defines that it did not, or no longer defines" };
       const loc = u.status === "deleted" ? `was \`${f.path}:${u.oldSpan![0]}-${u.oldSpan![1]}\`` : link(`${f.path}:${u.newSpan![0]}-${u.newSpan![1]}`, f.path, u.newSpan![0]);
       const tagStr = (u.renamedFrom ? ` · renamed from \`${u.renamedFrom}\`` : "") + u.tags.filter((t) => t !== "container-only").map((t) => ` · ${t}`).join("") + (u.tags.includes("container-only") ? " · container only (members listed separately)" : "");
       const kindLabel = u.kind === "const" ? (u.signature.match(/^(let|var)\b/)?.[1] ?? "const") : u.kind;
@@ -989,20 +1047,21 @@ function main(): void {
       const marker = `<!-- rb:unit id="${u.id}" kind="${u.kind}" status="${u.status}" hash="${u.hash}" -->`;
       L.push(h, marker, "");
       expected.push(h, marker);
-      if (u.callers) L.push(`**${CALLABLE_KINDS.has(u.kind) ? "Callers" : "References"} (by name):** ${u.callers.total ? u.callers.sites.map(siteLink).join(", ") + ` (${u.callers.total}${u.callers.total > CALLER_CAP ? ", first " + CALLER_CAP + " shown" : ""})` : "none found"}`, "");
-      const short = SHORT_KINDS.has(u.kind);
-      const doesBudget = short ? BUDGETS.short : BUDGETS.does;
+      if (u.callers) {
+        const extra = [u.callers.total > CALLER_CAP ? `first ${CALLER_CAP} shown` : "", u.callers.note ?? ""].filter(Boolean).join("; ");
+        L.push(`**${CALLABLE_KINDS.has(u.kind) ? "Callers" : "References"} (by name):** ${u.callers.total ? u.callers.sites.map(siteLink).join(", ") + ` (${u.callers.total}${extra ? "; " + extra : ""})` : `none found${extra ? " (" + extra + ")" : ""}`}`, "");
+      }
       if (u.status === "deleted") {
-        L.push(`${labelOf("did", u.kind)} ${u.slots.did?.text ?? `<<rb:did ${u.id} | ≤${BUDGETS.did} words, past tense: what this ${u.kind} used to do; if you can see what replaced it, name the replacement>>`}`, "");
+        L.push(`${labelOf("did", u.kind)} ${u.slots.did?.text ?? `<<rb:did ${u.id} | step 1: concise summary, past tense: what this ${u.kind} ${verbs.past}; if you can see what replaced it, name the replacement>>`}`, "");
       } else {
-        L.push(`${labelOf("does", u.kind)} ${u.slots.does?.text ?? `<<rb:does ${u.id} | ≤${doesBudget} words, present tense: what this ${u.kind} does now${u.callers ? "; may cite the callers line above" : ""}>>`}`, "");
+        L.push(`${labelOf("does", u.kind)} ${u.slots.does?.text ?? `<<rb:does ${u.id} | step 1: concise summary, present tense: what this ${u.kind} ${verbs.now}${u.callers ? "; may cite the callers line above" : ""}>>`}`, "");
         if (u.status === "modified") {
-          const sigNote = u.renamedFrom ? ` Renamed from \`${u.renamedFrom}\` — say so, then describe any other difference.` : u.oldSignature !== null && u.oldSignature !== u.signature ? ` The signature changed — name it: was \`${u.oldSignature}\`.` : "";
+        const sigNote = u.renamedFrom ? ` Renamed from \`${u.renamedFrom}\` — say so, then describe any other difference.` : u.oldSignature !== null && u.oldSignature !== u.signature ? ` The signature changed — name it: was \`${u.oldSignature}\`.` : "";
           const ws = u.tags.includes("whitespace-only") ? ' If the change is formatting only, write exactly: "formatting only".' : "";
-          L.push(`${labelOf("change")} ${u.slots.change?.text ?? `<<rb:change ${u.id} | ≤${BUDGETS.change} words: what it now does that it did not, or no longer does — stated first, checkable against the hunk below.${sigNote} A trailing clause on what the change is meant to accomplish is allowed after the description, never instead of it.${ws}>>`}`, "");
+          L.push(`${labelOf("change")} ${u.slots.change?.text ?? `<<rb:change ${u.id} | step 1: a concise summary, or a concise bullet per change when there is more than one: ${verbs.change} — stated first, checkable against the hunk below.${sigNote} A trailing clause on what the change is meant to accomplish is allowed after the description, never instead of it. If the code and its apparent intent disagree, describe the code and say so.${ws}>>`}`, "");
         }
       }
-      if (u.slots.review?.text !== "") { const slot = u.slots.review?.text, id = u.id; L.push(`**Review Observations:** ${slot ?? `<<rb:review ${id} | optional, ≤60 words: what a careful reader should check — unreachable or redundant code, unused leftovers, a missing case, behaviour the text above does not explain. Concrete and checkable only. Delete this whole line if there is nothing to say.>>`}`, ""); }
+      if (u.slots.review?.text !== "") { const slot = u.slots.review?.text, id = u.id; L.push(`**Review Observations:** ${slot ?? `<<rb:review ${id} | step 1, optional, concise: ${REVIEW_TAIL}>>`}`, ""); }
       if (u.revise) L.push(`<!-- rb:revise ${u.id}`, u.revise, "-->", "");
       L.push(...fence(u.hunk), "");
       if (u.notes) L.push(`**Notes:** ${u.notes}`, "");
@@ -1014,12 +1073,13 @@ function main(): void {
   // slot instructions must not contain ">" so that `<<rb:… | …>>` is always delimited by the first ">>".
   // Applied outside code fences only — a hunk may legitimately contain that text (this file's own source does).
   let fenceLen = 0;
-  const text = L.map((l) => {
+  const text0 = L.map((l) => {
     const fm = l.match(/^(`{3,})/);
     if (fenceLen === 0 && fm) { fenceLen = fm[1].length; return l; }
     if (fenceLen > 0) { if (fm && fm[1].length >= fenceLen && l.trim() === fm[1]) fenceLen = 0; return l; }
     return l.replace(/<<rb:([^|\n]*)\| ([^\n]*?)>>/g, (_m, id, instr) => `<<rb:${id}| ${instr.replace(/>/g, "›")}>>`);
   }).join("\n");
+  const text = listOnNextLine(text0); // a carried-over value that is a list keeps its bullets on their own lines
   // state for lint (§14): lives under the git directory so it is never in the diff
   fs.mkdirSync(stateDir, { recursive: true });
   if (fs.existsSync(outAbs)) fs.copyFileSync(outAbs, path.join(stateDir, "previous.md")); // whatever is overwritten stays recoverable
