@@ -96,7 +96,9 @@ Rules for every slot:
 7. `**Notes:**` lines are the reviewer's. Never edit, move, or remove them.
 
 Fill `**Overview:**` last, after every file section is complete. It is at the
-top of the file and its slot says `fill LAST`.
+top of the file and its slot says `fill LAST`. A change set with several
+distinct parts gets one lead sentence and then a `- ` bullet per part,
+directly under the lead with no blank line, each naming its files.
 
 Do not:
 

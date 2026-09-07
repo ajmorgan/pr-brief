@@ -792,7 +792,7 @@ function main(): void {
   const toRead = files.filter((f) => f.status !== "D").map((f) => `\`${f.path}\``);
   L.push(...(toRead.length ? toRead.map((p) => q(`- ${p}`)) : [q("- (none)")]), q(""));
   L.push(q(`**Style:** concise and plain. Declarative sentences; no preamble, hedging, or filler; never restate the heading ("This function…"). Word budgets are ceilings, not targets — most slots need one sentence.`), q(""), q("</details>"), "");
-  L.push(`**Overview:** ${overviewLocked ?? "<<rb:overview | fill LAST, after every file section below is complete. 3–8 sentences: what the whole change set is trying to accomplish and how the files below divide that work. Name the files or groups of files that carry each part.>>"}`, "");
+  L.push(`**Overview:** ${overviewLocked ?? "<<rb:overview | fill LAST, after every file section below is complete. one lead sentence on what the whole change set accomplishes, then, when it has more than one distinct part, a `- ` bullet per part naming the files that carry it (no blank line between lead and bullets); a single-part change set is 3–8 sentences instead, naming the files or groups of files that carry each piece.>>"}`, "");
   if (!overviewLocked && prev?.overview && !isToken(prev.overview)) {
     const changed = files.flatMap((f) => f.units.filter((u) => u.badge).map((u) => `${u.id} (${u.badge})`));
     const removed = prev ? [...prevUnits.keys()].filter((id) => !files.some((f) => f.units.some((u) => u.id === id))).map((id) => `${id} (removed)`) : [];

@@ -7,7 +7,9 @@ export const FORMAT_VERSION = 1;
 
 // Word budgets per slot (spec §10). `short` applies to non-function kinds.
 export const BUDGETS: Record<string, number> = {
-  overview: 200,
+  overview: 200, // prose form; the list form is budgeted per line: overviewLead for the lead sentence, overviewBullet per bullet
+  overviewLead: 40,
+  overviewBullet: 60,
   purpose: 60,
   changes: 150,
   does: 40,
@@ -115,8 +117,18 @@ export function isToken(v: string | undefined): boolean {
   return !!v && v.startsWith("<<rb:");
 }
 
+// Backticked spans — paths, identifiers, signatures — are references the rules ask for, not prose;
+// they do not count toward a budget.
 export function wordCount(s: string): number {
-  return s.split(/\s+/).filter((w) => w.length > 0).length;
+  return s.replace(/`[^`\n]*`/g, " ").split(/\s+/).filter((w) => w.length > 0).length;
+}
+
+/** The Overview split into its lead sentence and `- ` bullets (bullets empty for the prose form). */
+export function overviewParts(overview: string): { lead: string; bullets: string[] } {
+  const lines = overview.split("\n");
+  const first = lines.findIndex((l) => /^\s*- /.test(l));
+  if (first < 0) return { lead: overview, bullets: [] };
+  return { lead: lines.slice(0, first).join("\n"), bullets: lines.slice(first).join("\n").split(/\n(?=\s*- )/).map((b) => b.replace(/^\s*- /, "")) };
 }
 
 export function parseBrief(text: string): ParsedBrief {

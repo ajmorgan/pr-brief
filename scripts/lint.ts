@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { FORMAT_VERSION, BUDGETS, SHORT_KINDS, parseBrief, isToken, wordCount, stripReviseNotes, labelOf } from "./brief-format.ts";
+import { FORMAT_VERSION, BUDGETS, SHORT_KINDS, parseBrief, isToken, wordCount, stripReviseNotes, labelOf, overviewParts } from "./brief-format.ts";
 
 const STALE_PREFIX = "*(code changed since this note)*";
 // Concise-style check (spec §10): phrases that restate the heading or pad the sentence.
@@ -41,11 +41,30 @@ function main(): void {
   // empty slots
   for (const t of brief.tokens) P("EMPTY", `${t.token} (line ${t.line})`, "write it");
 
+  // a list under the Overview after a blank line is outside the slot: the parser ignores it and the
+  // next regeneration drops it. Catch it here rather than lose the bullets silently.
+  {
+    const lines = text.split("\n");
+    let i = lines.findIndex((l) => l.startsWith("**Overview:**"));
+    if (i >= 0) {
+      while (i < lines.length && lines[i].trim() !== "") i++; // the slot: label line through the last non-blank line
+      let j = i;
+      while (j < lines.length && lines[j].trim() === "") j++;
+      if (j < lines.length && /^\s*- /.test(lines[j]) && !lines[j].startsWith("---"))
+        P("STRUCTURE", `**Overview:** (line ${j + 1})`, "a bullet list follows the Overview after a blank line, outside the slot — delete the blank line so the bullets sit directly under the lead sentence");
+    }
+  }
+
   // overview
   if (brief.overview === null) P("EMPTY", "**Overview:**", "the Overview line is missing — restore `**Overview:** …` under the summary block");
   else if (!isToken(brief.overview)) {
     if (state.overviewLocked && brief.overview !== state.overviewLocked) P("LOCKED", "**Overview:**", "differs from the previous brief although nothing changed — restore the previous text");
-    if (wordCount(brief.overview) > BUDGETS.overview) P("BUDGET", "**Overview:**", `${wordCount(brief.overview)} words > ${BUDGETS.overview} — shorten`);
+    const ov = overviewParts(brief.overview);
+    if (ov.bullets.length) {
+      // list form: the lead and each bullet are budgeted on their own, so the total scales with the parts
+      if (wordCount(ov.lead) > BUDGETS.overviewLead) P("BUDGET", "**Overview:** lead", `${wordCount(ov.lead)} words > ${BUDGETS.overviewLead} — shorten the lead sentence`);
+      ov.bullets.forEach((b, i) => { if (wordCount(b) > BUDGETS.overviewBullet) P("BUDGET", `**Overview:** bullet ${i + 1}`, `${wordCount(b)} words > ${BUDGETS.overviewBullet} — shorten`); });
+    } else if (wordCount(brief.overview) > BUDGETS.overview) P("BUDGET", "**Overview:**", `${wordCount(brief.overview)} words > ${BUDGETS.overview} — shorten`);
     if (!state.overviewLocked) { const st = styleProblem(brief.overview); if (st) P("STYLE", "**Overview:**", `${st} is filler — cut it`); }
   }
 

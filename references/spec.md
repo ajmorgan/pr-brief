@@ -260,7 +260,7 @@ Add `rules/<lang>/*.yml` and a line in the language→extension map. No other ch
 >
 > </details>
 
-**Overview:** <3–8 sentences: what the whole change set is trying to accomplish and how the files below divide the work — SLOT, written after every file section is complete>
+**Overview:** <one lead sentence, then a `- ` bullet per distinct part naming its files (3–8 sentences when there is one part) — SLOT, written after every file section is complete>
 
 ---
 
@@ -348,12 +348,14 @@ Three levels, and a fixed order of work.
 **Order of work.** Fill every file section — `Purpose:`, `Changes:`, every unit's `Purpose:`/`Changes:`/`Purpose:` (past tense, deleted unit), every `other` line — **before** writing `Overview:`. The overview is a synthesis of the file sections, not a guess made before reading them; writing it last is what makes it accurate. The skeleton marks the slot `fill last`; SKILL.md places it as the final step before lint.
 
 **Change-set level — the thesis.**
-- `Overview:` — 3–8 sentences. What the whole change set is trying to accomplish, and how the files below divide that work (name the files or groups of files that carry each part). Intent is expected here. Written last.
+- `Overview:` — one lead sentence on what the whole change set accomplishes, then, when it has more than one distinct part, a `- ` bullet per part naming the files that carry it, with no blank line between the lead and the bullets (a blank line ends the slot; lint reports a list left outside it as STRUCTURE). Budget: lead ≤40 words and each bullet ≤60, so the total scales with the parts; the prose form for a single-part change set is 3–8 sentences, ≤200 words. Intent is expected here. Written last.
 
 **File level — the map. Intent is allowed here.**
 - `Purpose:` — 1–2 sentences. What the file is responsible for, as it now stands.
 - `Changes:` — 2–5 sentences or bullets. What the changes in this file are **meant to accomplish**, and which units below carry them. Must name every unit in the section (lint checks). This is where "why" lives.
 - Added files: no `Changes:` slot. `Purpose:` carries the intent ("what it is for, who uses it"); each new unit's `Purpose:` carries the intended use of that function.
+
+**Budgets count prose only.** Backticked spans — paths, identifiers, signatures — are the references the rules ask for and do not count toward any word budget.
 
 **Function level — the territory. Checkable against the hunk.**
 - `Purpose:` — ≤40 words. The function as it now stands, for someone who has forgotten it exists. Present tense. May reference the generated callers line ("used by the controller and the batch importer to …").
