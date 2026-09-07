@@ -655,10 +655,20 @@ function main(): void {
   const sources = loadPrevious(outAbs, stateDir, a.mode, a.fresh);
   // Prose and reviewer notes carry over from ANY earlier brief whose unit body matches (by hash).
   // The "since last" bookkeeping — badges, counts, revise notes, the header line — only makes
-  // sense against a brief of the same work: the same commit in commit mode, the same mode
-  // otherwise (a rebased base is still the same change set). Anything else starts clean.
+  // sense against a brief of the same work: the same commit in commit mode; otherwise the same
+  // mode, provided none of that brief's work has been committed since. A rebase or an amend
+  // rewrites history (the old base is no ancestor of the new one) and an unrelated commit moves
+  // the base without touching the brief's files: both are still the same change set. A commit
+  // that touches those files means the reviewed work landed, and the next brief starts clean.
   const primary = sources[0] ?? null;
-  const sameWork = (p: ParsedBrief) => (a.mode === "commit" ? p.front.mode === "commit" && p.front.head === R.head : p.front.mode === a.mode);
+  const committedSince = (p: ParsedBrief): boolean => {
+    const pb = typeof p.front.base === "string" ? p.front.base : null;
+    if (!pb || pb === R.base) return false;
+    if (gitOk(["merge-base", "--is-ancestor", pb, R.base]) === null) return false; // history rewritten: same work
+    const files = p.files.map((f) => f.path);
+    return files.length > 0 && (gitOk(["diff", "--name-only", pb, R.base, "--", ...files]) ?? "").trim().length > 0;
+  };
+  const sameWork = (p: ParsedBrief) => (a.mode === "commit" ? p.front.mode === "commit" && p.front.head === R.head : p.front.mode === a.mode && !committedSince(p));
   const prev = primary && sameWork(primary) ? primary : null;
   const unitMaps = sources.map((s) => new Map(s.files.flatMap((pf) => pf.units.map((pu) => [pu.id, pu] as const))));
   const fileMaps = sources.map((s) => new Map(s.files.map((pf) => [pf.path, pf] as const)));
@@ -681,7 +691,7 @@ function main(): void {
   const snapOk = prevSnap && gitOk(["cat-file", "-e", `${prevSnap}^{commit}`]) !== null;
   const newCommits = prev && prevHead ? (gitOk(["log", "--reverse", "--format=%h %s", `${prevHead}..${R.head}`]) ?? "").trim().split("\n").filter(Boolean) : [];
   const sinceDiff = snapOk ? parseUnified(git(["diff", "-U3", "--no-color", "--no-renames", prevSnap, ...(R.newSide === "worktree" ? [] : R.newSide === "index" ? ["--cached"] : [R.newSide]), ...excl], { ok: true })) : new Map<string, Hunk[]>();
-  const counts = { updated: 0, new: 0, removed: 0, unchanged: 0 };
+  const counts = { changed: 0, removed: 0, unchanged: 0 };
   let carried = 0;
   const lock = (text: string | undefined): { locked: boolean; text: string } | null => (text && !isToken(text) ? { locked: true, text } : null);
 
@@ -705,10 +715,11 @@ function main(): void {
         }
       }
       if (!prev) continue;
-      if (!pu || !prevUnits.has(u.id)) { u.badge = "new since last"; counts.new++; anyChanged = true; continue; }
+      // one badge, one meaning: this unit is not what the previous brief showed (absent then, or a different body)
+      if (!pu || !prevUnits.has(u.id)) { u.badge = "changed since last"; counts.changed++; anyChanged = true; continue; }
       if (pu.hash === u.hash) counts.unchanged++;
       else {
-        counts.updated++; anyChanged = true; u.badge = "updated since last";
+        counts.changed++; anyChanged = true; u.badge = "changed since last";
         const since = (sinceDiff.get(f.path) ?? []).filter((h) => h.plusLines.some((l) => u.newLines.has(l) || (u.newSpan && l >= u.newSpan[0] && l <= u.newSpan[1])) || h.minusLines.some((l) => u.oldLines.has(l)));
         u.revise = [
           ...["does", "change", "did", "other", "review"].filter((k) => pu.slots[k] && !isToken(pu.slots[k])).map((k) => `previous ${labelOf(k).slice(2,-3)}: ${pu.slots[k]}`),
@@ -732,11 +743,11 @@ function main(): void {
     if (pfPrev) {
       const c = lock(pfPrev.slots.changes);
       if (!anyChanged) { if (c) f.slots.changes = c; const r = lock(pfPrev.slots.review); if (r) f.slots.review = r; else if (!pfPrev.slots.review && (c ?? lock(pfPrev.slots.purpose))) f.slots.review = { locked: true, text: "" }; }
-      else if (c) f.revise = [`previous Changes: ${c.text}`, `commits touching this file since last brief: ${f.commitsSinceLast.length ? f.commitsSinceLast.join("; ") : "none (uncommitted changes)"}`, `units updated or new in this file: ${f.units.filter((u) => u.badge).map((u) => u.name + " (" + u.badge + ")").join(", ")}`, "Revise the previous text using the above. Lint removes this note."].join("\n");
+      else if (c) f.revise = [`previous Changes: ${c.text}`, `commits touching this file since last brief: ${f.commitsSinceLast.length ? f.commitsSinceLast.join("; ") : "none (uncommitted changes)"}`, `units changed in this file: ${f.units.filter((u) => u.badge).map((u) => u.name + " (" + u.badge + ")").join(", ")}`, "Revise the previous text using the above. Lint removes this note."].join("\n");
     }
   }
   if (prev) for (const id of prevUnits.keys()) if (!files.some((f) => f.units.some((u) => u.id === id))) counts.removed++;
-  const overviewLocked = prev && prev.overview && !isToken(prev.overview) && counts.updated + counts.new + counts.removed === 0 ? prev.overview
+  const overviewLocked = prev && prev.overview && !isToken(prev.overview) && counts.changed + counts.removed === 0 ? prev.overview
     : !prev && a.mode === "commit" && cache[`overview@commit@${R.head}`] ? cache[`overview@commit@${R.head}`].slots.overview : null;
   const orphanNotes = prev ? [...prevUnits.values()].filter((pu) => pu.slots.notes && !files.some((f) => f.units.some((u) => u.id === pu.id))).map((pu) => `- \`${pu.id}\` — ${pu.slots.notes}`) : [];
 
@@ -772,7 +783,7 @@ function main(): void {
   if (renames.length) L.push(q(`- **Renamed** ${renames.join(", ")}`));
   if (prev) {
     const rangeChanged = prev.front.mode !== a.mode || prev.front.base !== R.base;
-    L.push(q(`- **Since last brief** ${newCommits.length} commit${newCommits.length === 1 ? "" : "s"}${newCommits.length ? " (" + newCommits.slice(0, 5).join("; ") + (newCommits.length > 5 ? `; … ${newCommits.length - 5} more` : "") + ")" : ""}${dirty ? " + uncommitted changes" : ""} — ${counts.updated} updated, ${counts.new} new, ${counts.removed} removed, ${counts.unchanged} unchanged${rangeChanged ? ` · range changed: ${prev.front.mode}/${String(prev.front.base).slice(0, 7)} → ${a.mode}/${R.base.slice(0, 7)}` : ""}`));
+    L.push(q(`- **Since last brief** ${newCommits.length} commit${newCommits.length === 1 ? "" : "s"}${newCommits.length ? " (" + newCommits.slice(0, 5).join("; ") + (newCommits.length > 5 ? `; … ${newCommits.length - 5} more` : "") + ")" : ""}${dirty ? " + uncommitted changes" : ""} — ${counts.changed} changed, ${counts.removed} removed, ${counts.unchanged} unchanged${rangeChanged ? ` · range changed: ${prev.front.mode}/${String(prev.front.base).slice(0, 7)} → ${a.mode}/${R.base.slice(0, 7)}` : ""}`));
   }
   if (body.length > 3) L.push(q(""), q(`<details class="rb-meta"><summary>Commit message (${body.length} lines)</summary>`), q(""), ...body.map((b) => q(`- ${b}`)), q(""), q("</details>"));
   const atRev = R.newSide !== "worktree" && R.newSide !== "index" ? R.newSide.slice(0, 7) : null;

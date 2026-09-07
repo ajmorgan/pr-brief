@@ -20,7 +20,8 @@ function attrs(line) {
 /**
  * @returns {{ files: File[], units: Unit[], overviewLine: number|null, lines: number }}
  * File: { path, status, line, end, hash, units: Unit[] }
- * Unit: { id, kind, status, hash, line, end, heading, name, badge, file, index }
+ * Unit: { id, kind, status, hash, line, end, heading, name, touched, file, index }
+ *   touched: the most recent set of changes touched this unit (the heading's `· changed since last`)
  * All line numbers are 1-based; `end` is the last line belonging to the entry.
  */
 export function parseBrief(text) {
@@ -59,9 +60,9 @@ export function parseBrief(text) {
         line: bullet ? n + 1 : (pendingHeading?.line ?? n),
         end: n, heading: bullet ? '' : (pendingHeading?.text ?? ''),
         name: a.id.includes('#') ? a.id.slice(a.id.indexOf('#') + 1) : a.id,
-        badge: '', file, index: units.length,
+        touched: false, file, index: units.length,
       };
-      if (!bullet) unit.badge = badgeOf(pendingHeading?.text ?? '');
+      if (!bullet) unit.touched = touchedBy(pendingHeading?.text ?? '');
       units.push(unit);
       file?.units.push(unit);
       pendingBullet = bullet ? unit : null;
@@ -70,7 +71,7 @@ export function parseBrief(text) {
     }
     if (pendingBullet && l.startsWith('- ')) {
       pendingBullet.heading = unlink(l).slice(2, l.indexOf(' — ') > 0 ? l.indexOf(' — ') : undefined);
-      pendingBullet.badge = badgeOf(l);
+      pendingBullet.touched = touchedBy(l);
       pendingBullet = null;
     }
   }
@@ -123,10 +124,10 @@ export function unitLocation(unit) {
   return m ? { path: m[1], start: Number(m[2]), end: Number(m[3]) } : null;
 }
 
-function badgeOf(text) {
-  if (text.includes('updated since last')) return 'updated';
-  if (text.includes('new since last')) return 'new';
-  return '';
+/** Whether a heading or bullet says the most recent set of changes touched the unit. Older briefs
+ *  wrote "new since last" / "updated since last"; the shared tail reads the same. */
+function touchedBy(text) {
+  return text.includes('since last');
 }
 
 /** The innermost unit whose range contains `line`, or null (source outlines nest: a class contains its methods). */
@@ -141,9 +142,9 @@ export function fileAt(brief, line) {
   return brief.files.find((f) => line >= f.line && line <= f.end) ?? null;
 }
 
-/** Next (dir=1) or previous (dir=-1) unit from `line`; `changedOnly` skips unbadged units. Wraps. */
+/** Next (dir=1) or previous (dir=-1) unit from `line`; `changedOnly` skips untouched units. Wraps. */
 export function stepUnit(brief, line, dir, changedOnly = false) {
-  const list = changedOnly ? brief.units.filter((u) => u.badge) : brief.units;
+  const list = changedOnly ? brief.units.filter((u) => u.touched) : brief.units;
   if (!list.length) return null;
   if (dir > 0) return list.find((u) => u.line > line) ?? list[0];
   const before = list.filter((u) => u.line < line);

@@ -377,7 +377,7 @@ async function onWatchMeta(meta) {
     if (active.remote) {
       meta ??= await files.remoteMeta(active.remote);
       briefMeta = meta;
-      // the viewer's own code was rebuilt (build.mjs --stamp, sync-viewer.sh): this page is stale, reload it
+      // the viewer's own code was rebuilt (build.mjs --stamp): this page is stale, reload it
       if (meta.viewer) {
         if (viewerBuild === null) viewerBuild = meta.viewer;
         else if (meta.viewer !== viewerBuild) {
@@ -626,7 +626,7 @@ function sourceOutline(doc) {
   const file = { path: doc.source, status: doc.rev ?? '', line: 1, end: doc.content.split('\n').length, hash: '', units: [] };
   file.units = doc.symbols.map((s, index) => ({
     id: s.id, kind: s.kind, status: '', hash: '', line: s.line, end: s.end, heading: s.display,
-    name: s.scope ? `${s.scope}.${s.name}` : s.name, badge: inBrief.has(s.id) ? 'brief' : '', file, index,
+    name: s.scope ? `${s.scope}.${s.name}` : s.name, touched: false, badge: inBrief.has(s.id) ? 'brief' : '', file, index,
   }));
   return { files: [file], units: file.units, overviewLine: null, lines: file.end };
 }
@@ -658,7 +658,7 @@ function updateBriefStatus(line) {
   if (!outline) return;
   const u = briefs.unitAt(outline, line);
   const noun = brief ? 'unit' : 'symbol';
-  const changed = outline.units.filter((x) => x.badge).length;
+  const changed = outline.units.filter((x) => x.touched || x.badge).length;
   els.status.update({ words: (u ? `${noun} ${u.index + 1}/${outline.units.length}` : `${outline.units.length} ${noun}s`) + (changed ? (brief ? ` · ${changed} changed` : ` · ${changed} in brief`) : '') });
 }
 
@@ -681,7 +681,7 @@ function jumpToUnit(unit, query) {
 }
 
 async function pickUnit() {
-  const items = outline.units.map((u) => ({ id: u.index, label: `${u.file.path.split('/').pop()} › ${u.name}`, hint: [u.status, u.badge].filter(Boolean).join(' · ') }));
+  const items = outline.units.map((u) => ({ id: u.index, label: `${u.file.path.split('/').pop()} › ${u.name}`, hint: [u.status, u.touched ? 'touched' : u.badge].filter(Boolean).join(' · ') }));
   const item = await els.palette.open(items, { placeholder: 'Go to unit…' });
   if (item) jumpToUnit(outline.units[item.id]);
 }

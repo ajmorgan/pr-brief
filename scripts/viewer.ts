@@ -68,7 +68,7 @@ function repoWeb(dir: string): string | null {
 let repo = repoWeb(root);
 
 // Build id of the served app (the VERSION stamp in sw.js), re-read on every call so an open tab
-// notices a sync-viewer.sh run and reloads itself.
+// notices a `build.mjs --stamp` and reloads itself.
 function viewerBuild(): string | null {
   try { return fs.readFileSync(path.join(VIEWER, "sw.js"), "utf8").match(/VERSION = '([^']+)'/)?.[1] ?? null; } catch { return null; }
 }

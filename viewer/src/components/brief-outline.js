@@ -64,13 +64,13 @@ export class BriefOutline extends HTMLElement {
     if (!this.#list) return;
     const b = this.#brief;
     if (!b) { this.#list.replaceChildren(); this.#count.textContent = ''; return; }
-    const changed = b.units.filter((u) => u.badge).length;
+    const changed = b.units.filter((u) => u.touched || u.badge).length; // brief: touched units; source file: symbols in the brief
     this.#count.textContent = this.#mode === 'file'
       ? `${b.units.length} symbols` + (changed ? ` · ${changed} in brief` : '')
       : `${b.files.length} files · ${b.units.length} units` + (changed ? ` · ${changed} changed` : '');
     const items = [];
     for (const f of b.files) {
-      const units = this.#changedOnly ? f.units.filter((u) => u.badge) : f.units;
+      const units = this.#changedOnly ? f.units.filter((u) => u.touched || u.badge) : f.units;
       if (this.#changedOnly && !units.length) continue;
       const li = document.createElement('li');
       li.className = 'outline-file';
@@ -97,9 +97,11 @@ export class BriefOutline extends HTMLElement {
         name.className = 'outline-name';
         name.textContent = u.kind === 'other' || u.kind === 'file' ? u.heading || u.name : u.name.split('.').pop();
         name.title = u.heading || u.id;
+        // one word per unit, its status; highlighted as a pill when the most recent set of changes touched it
         const meta = document.createElement('span');
         meta.className = 'outline-meta';
         meta.textContent = u.kind === 'other' ? 'other' : (u.status || u.kind);
+        if (u.touched) { meta.classList.add('outline-meta-touched'); meta.title = 'Touched by the most recent set of changes'; }
         ub.append(name, meta);
         if (u.badge) {
           const badge = document.createElement('span');

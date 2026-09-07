@@ -231,8 +231,7 @@ brief-outline {
 .outline-unit.active > .outline-select { background: var(--surface2); }
 .outline-unit.active .outline-name { color: var(--accent); }
 .outline-badge { font-size: 0.62rem; padding: 0.05rem 0.35rem; border-radius: 999px; font-family: var(--sans); }
-.outline-badge-updated { background: color-mix(in srgb, var(--syn-number, #e5c07b) 25%, transparent); color: var(--syn-number, #e5c07b); }
-.outline-badge-new { background: color-mix(in srgb, var(--syn-string, #98c379) 25%, transparent); color: var(--syn-string, #98c379); }
+.outline-meta-touched { padding: 0.05rem 0.35rem; border-radius: 999px; background: color-mix(in srgb, var(--syn-number, #e5c07b) 25%, transparent); color: var(--syn-number, #e5c07b); }
 .outline-badge-brief { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); cursor: pointer; }
 .outline-badge-brief:hover { background: color-mix(in srgb, var(--accent) 40%, transparent); }
 

@@ -194,7 +194,7 @@ The fact table the agent and the lint both read. One record per unit:
 | `callers` | `{ total, sites: ["path:line", …] }` per §6.5, or null |
 | `tags` | subset of `whitespace-only` `container-only` `unsupported-language` `generated` `binary` |
 | `hash` | sha256 prefix of the unit body (own lines only for container-only units and buckets) |
-| `badge` | `updated since last` / `new since last` / empty |
+| `badge` | `changed since last` / empty — the unit is not what the previous brief of the same work showed (absent then, or a different body) |
 | `renamedFrom` | old qualified name when the unit was paired as a rename, else null |
 
 `--list` prints this as a table, one row per unit.
@@ -279,7 +279,7 @@ Add `rules/<lang>/*.yml` and a line in the language→extension map. No other ch
   <hunk>
   ```
 
-### `save(Order o)` — modified · [`OrderService.java:41-68`](src/orders/OrderService.java#L41)[ · renamed from `x`][ · container only (members listed separately)][ · updated since last]
+### `save(Order o)` — modified · [`OrderService.java:41-68`](src/orders/OrderService.java#L41)[ · renamed from `x`][ · container only (members listed separately)][ · changed since last]
 <!-- rb:unit id="…" kind="method" status="modified" hash="…" -->
 
 **Callers (by name):** [`OrderController.java:88`](…), [`BatchImport.java:141`](…) (2)   ← generated, immutable; **References (by name):** for class-like units
@@ -381,7 +381,7 @@ Three levels, and a fixed order of work.
 | 11 | summary block | blockquote of bullets with folded commit message and agent instructions | decided 2026-09-06 |
 | 12 | languages | rules for TS, TSX, JS, Java, Python, Kotlin, Go, Lua, Bash, HTML, CSS, YAML, Markdown; **no** XML, Groovy or Gradle (custom grammars) | decided 2026-09-06 |
 | 13 | unit layer stays language-agnostic | every symbol a rule finds is a unit; no per-language heuristics (accessor tagging etc.) in extraction | decided 2026-09-06 |
-| 14 | since-last | computed only against a brief of the same work (same commit, or same mode); prose carries from any brief or the cache by hash | decided 2026-09-06 |
+| 14 | since-last | computed only against a brief of the same work (same commit; or same mode and none of the previous brief's files committed between the two bases); prose carries from any brief or the cache by hash | decided 2026-09-06, tightened 2026-09-07 |
 
 ## 12. Edge cases
 
@@ -421,7 +421,6 @@ review-brief/
     brief-format.ts     # the brief parser and budgets shared by extract and lint
     viewer.ts           # localhost server for the bundled editor (§18)
     selftest.sh         # fixture-based regression test
-    sync-viewer.sh      # refreshes viewer/ from ~/code/web/editor
   rules/<lang>/units.yml   # typescript (+ units-tsx.yml), javascript, java, python, kotlin, go, lua, bash, html, css, yaml, markdown
   references/
     spec.md             # this document
@@ -450,7 +449,7 @@ Other implementation facts: overloads (two symbols with the same scope, name and
 
 ## 15. Incremental updates (cache)
 
-**Same work only.** The since-last bookkeeping — badges, updated/new/removed counts, revise notes, the header line, the `previous:` front matter — is computed only against a previous brief of the *same work*: in commit mode the same commit; otherwise the same mode (a rebased base is still the same change set). Any other previous brief is ignored for that purpose, so briefing an unrelated commit never reports "300 commits since, everything new". Prose carry-over is independent of this: a unit's text is taken from any earlier brief or the cache whose unit body hash matches, and reviewer `Notes:` are never dropped (they get the *(code changed since this note)* prefix when the code moved).
+**Same work only.** The since-last bookkeeping — badges, changed/removed counts, revise notes, the header line, the `previous:` front matter — is computed only against a previous brief of the *same work*: in commit mode the same commit; otherwise the same mode, provided none of the previous brief's work has been committed since — the previous `base` is an ancestor of the current one and the commits between them touch none of the previous brief's files. A rebase or an amend rewrites history (the old base is no ancestor), and an unrelated commit moves the base without touching those files: both are still the same change set. Once the reviewed work lands in a commit, the next working-tree brief starts clean — no pills, no since-last line — while its prose still carries over by hash. Any other previous brief is ignored for that purpose, so briefing an unrelated commit never reports "300 commits since, everything new". Prose carry-over is independent of this: a unit's text is taken from any earlier brief or the cache whose unit body hash matches, and reviewer `Notes:` are never dropped (they get the *(code changed since this note)* prefix when the code moved).
 
 **Commits are immutable.** On a clean lint of a commit-mode brief the cache also stores the overview and each file's Changes/Review Observations under the commit id, so briefing that commit again later — even after other briefs — costs no slots at all.
 
@@ -517,7 +516,7 @@ The instruction is *revise using this*, not *rewrite*. The note is stripped by l
 The reviewer's summary line becomes:
 
 ```
-> **Since last brief:** 3 commits (<sha> <subject>, …) + uncommitted changes — u updated, n new, r removed, k unchanged
+> **Since last brief:** 3 commits (<sha> <subject>, …) + uncommitted changes — c changed, r removed, k unchanged
 ```
 
 ### 15.3 Carry-over rules
@@ -527,12 +526,12 @@ Extract reads the existing `REVIEW_BRIEF.md` (if present and its front matter pa
 | previous state | new state | result |
 |---|---|---|
 | same `id`, same `hash` | — | prose slots pre-filled from the previous brief; heading badge: none |
-| same `id`, different `hash` | — | prose slots emptied, revision note attached (§15.2); heading badge **updated since last** |
-| `id` absent previously | — | prose slots empty; heading badge **new since last** |
+| same `id`, different `hash` | — | prose slots emptied, revision note attached (§15.2); heading badge **changed since last** |
+| `id` absent previously | — | prose slots empty; heading badge **changed since last** |
 | `id` present previously | absent now | unit dropped from the brief; counted in the summary as *removed* |
 
 Change-set level:
-- `Overview:` carried over only if no unit is *updated*, *new*, or *removed*. Otherwise emptied with a revision note (previous overview, new commit subjects, list of updated/new/removed units) and written last, after the file sections are revised.
+- `Overview:` carried over only if no unit is *changed* or *removed*. Otherwise emptied with a revision note (previous overview, new commit subjects, list of changed/removed units) and written last, after the file sections are revised.
 
 File level:
 - `Purpose:` carried over, locked, while the file's content hash is unchanged; when the file changed it is reopened with a revise note holding the previous text, so the agent confirms or adjusts it rather than starting over.
@@ -541,7 +540,7 @@ File level:
 The summary block gains a first line:
 
 ```
-> - **Since last brief** N commits (first five subjects; … M more) [+ uncommitted changes] — u updated, n new, r removed, k unchanged [· range changed: …]
+> - **Since last brief** N commits (first five subjects; … M more) [+ uncommitted changes] — c changed, r removed, k unchanged [· range changed: …]
 ```
 
 `--fresh` ignores any existing brief; every slot is empty and no badges are shown.
@@ -630,7 +629,7 @@ A fixture repository with a known branch, a golden `units.json`, and a golden li
 
 ## 18. Viewer (brief mode in xor)
 
-The skill bundles a copy of xor, the editor (`viewer/`, synced from `~/code/web/editor` by `scripts/sync-viewer.sh`; `viewer/VENDORED` records the sync). The editor has a **brief mode** that activates for any document whose front matter starts `review-brief:`. The agent never uses it; it is the reviewer's surface.
+The skill bundles xor, the editor (`viewer/`, developed in place; there is no other copy). The editor has a **brief mode** that activates for any document whose front matter starts `review-brief:`. The agent never uses it; it is the reviewer's surface.
 
 ### 18.1 How the brief reaches the editor
 
@@ -654,7 +653,7 @@ The agent rewrites the brief on every extract run; the reviewer edits it in the 
 
 ### 18.3 What brief mode adds
 
-- **Outline** (sidebar): files → units with status and *updated/new since last* badges; click to jump; `changed` filter.
+- **Outline** (sidebar): files → units, each with one word, its status (new / modified / deleted / other); the word is highlighted as a pill on units the most recent set of changes touched (`changed since last` in the brief text); click to jump; `changed` filter shows only those.
 - **Motions and commands**: `]u` / `[u` next/previous unit (honouring the filter); `:unit <name>` / `:file <path>` (no argument → picker); `:note` puts the cursor on the unit's `**Notes:**` line in insert mode, creating the line after the unit's hunk if absent; `:changed` toggles the filter; `:rel` reloads.
 - **Folded hunks**: every ```` ```diff ```` fence is folded on open in the editor (`zR`/`zM` as usual) and rendered as a collapsed `<details>` in the preview, so prose reads first.
 - **Status**: `unit i/n · k changed`.
@@ -666,7 +665,7 @@ The agent rewrites the brief on every extract run; the reviewer edits it in the 
 
 ### 18.4 What the editor relies on (format contract)
 
-Only these, all already required by §9 and §15: the front-matter gate line; `## \`path\` — status` file headings (the path may be wrapped in a Markdown link) followed by an `rb:file` marker; `### …` unit headings followed by an `rb:unit` marker (bullet units: marker then `- ` line); badge text `updated since last` / `new since last` in the heading or bullet; `**Purpose:**`, `**Changes:**`, `**Notes:**` as labelled slots; hunks as fenced `diff` blocks (fence length ≥ 3); relative links for paths. Nothing else in the brief is interpreted.
+Only these, all already required by §9 and §15: the front-matter gate line; `## \`path\` — status` file headings (the path may be wrapped in a Markdown link) followed by an `rb:file` marker; `### …` unit headings followed by an `rb:unit` marker (bullet units: marker then `- ` line); badge text `changed since last` in the heading or bullet; `**Purpose:**`, `**Changes:**`, `**Notes:**` as labelled slots; hunks as fenced `diff` blocks (fence length ≥ 3); relative links for paths. Nothing else in the brief is interpreted.
 
 ## 17. Open questions
 

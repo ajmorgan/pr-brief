@@ -55,8 +55,7 @@ scripts/lint.ts          verifier
 scripts/brief-format.ts  shared parser
 scripts/selftest.sh      builds a fixture repo and checks the unit table
 scripts/viewer.ts        localhost server: serves viewer/ + GET/PUT /brief + GET /file
-scripts/sync-viewer.sh   viewer/ ↔ ~/code/web/editor (pull by default, --push to publish the vendored copy)
-viewer/                  vendored xor editor (vim mode, markdown preview, brief mode); VENDORED records the sync
+viewer/                  the xor editor (vim mode, markdown preview, brief mode); this is its only copy
 rules/<lang>/units.yml   ast-grep rules per language (TypeScript, TSX, JavaScript, Java)
 sgconfig.yml             ast-grep project config pointing at rules/
 references/spec.md       the specification

@@ -4,7 +4,7 @@ An offline-first Progressive Web App for editing Markdown and code, and for read
 
 ## Run it
 
-This copy lives inside the review-brief skill and is the one being edited. After changing app code or CSS run `node build.mjs --stamp` (re-stamps the service worker and import map; needs no dependencies). Only a change to `src/vendor-entry.js` or the npm dependencies needs the full `npm install && npm run build`, which requires `node_modules`. To publish this copy back to `~/code/web/editor`, run `scripts/sync-viewer.sh --push` from the skill.
+The editor lives inside the review-brief skill; this is its only copy. After changing app code or CSS run `node build.mjs --stamp` (re-stamps the service worker and import map; needs no dependencies). Only a change to `src/vendor-entry.js` or the npm dependencies needs the full `npm install && npm run build`, which requires `node_modules`.
 
 
 ```sh

@@ -16,7 +16,7 @@ previous:
 > - **Base** `f087cbd` → **Head** `f36e06b` + working tree
 > - **Files** 7 changed (2 added, 4 modified, 1 deleted) · **Units** 18 (7 new, 7 modified, 2 deleted, 2 other)
 > - **Signature changes** `OrderService.save`
-> - **Since last brief** 0 commits — 0 updated, 2 new, 2 removed, 16 unchanged
+> - **Since last brief** 0 commits — 2 changed, 2 removed, 16 unchanged
 > 
 > <details class="rb-meta"><summary>Agent instructions</summary>
 > 
@@ -44,7 +44,7 @@ previous:
 
 **Changes:** Raises `level` from 1 to 2 in the `demo` document; the only change, matching the new optional `level` on `Config` in `src/util/parse.ts`.
 
-### `name: demo` — modified doc · [`config/app.yaml:1-3`](config/app.yaml#L1) · new since last
+### `name: demo` — modified doc · [`config/app.yaml:1-3`](config/app.yaml#L1) · changed since last
 <!-- rb:unit id="config/app.yaml#demo" kind="doc" status="modified" hash="038941a6d4f653f2" -->
 
 **Purpose:** The one YAML document: `name: demo` and its `level`.
@@ -254,7 +254,7 @@ previous:
    const raw = readFileSync(path, "utf-8");
 ```
 
-### `DEFAULT_PATH` — modified const · [`src/util/parse.ts:3-3`](src/util/parse.ts#L3) · new since last
+### `DEFAULT_PATH` — modified const · [`src/util/parse.ts:3-3`](src/util/parse.ts#L3) · changed since last
 <!-- rb:unit id="src/util/parse.ts#DEFAULT_PATH" kind="const" status="modified" hash="746fb8cc3ce0048b" -->
 
 **Purpose:** The default config location, `config/app.yml`.
