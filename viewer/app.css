@@ -612,15 +612,3 @@ app-toast {
 .more-menu button kbd { margin-left: auto; opacity: 0.6; }
 .more-menu button[role="menuitemcheckbox"][aria-checked="true"]::before { content: "✓"; position: absolute; left: 0.6rem; color: var(--accent); }
 .more-menu hr { border: none; border-top: 1px solid var(--border); margin: 0.3rem 0; }
-
-/* Cross-document view transitions: a file link out of the brief, and back, cross-fades the workspace
-   instead of cutting; the toolbar and sidebar are named so they hold still. Chrome and Safari animate;
-   a browser without the feature ignores the rule and navigates as before. */
-@view-transition { navigation: auto; }
-.toolbar { view-transition-name: toolbar; }
-.sidebar { view-transition-name: sidebar; }
-.workspace { view-transition-name: workspace; }
-::view-transition-old(workspace), ::view-transition-new(workspace) { animation-duration: 160ms; }
-@media (prefers-reduced-motion: reduce) {
-  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
-}
