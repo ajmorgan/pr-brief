@@ -151,6 +151,9 @@ async function openDocument(id) {
   document.title = `${doc.name} · xor`;
   els.files.activeId = doc.id;
   settings.lastDocId = doc.id;
+  // the address bar names the active document, so a history entry never points at a file that was closed
+  const url = doc.remote ? `?brief=${new URL(doc.remote).pathname}` : doc.source ? `?file=${encodeURIComponent(doc.source)}` : location.pathname;
+  if (location.search !== (url.startsWith('?') ? url : '')) history.replaceState(history.state, '', url);
   saveSettings(settings);
   applySettings({ persist: false });
   updateSavedStatus();
@@ -1124,6 +1127,12 @@ async function boot() {
   applySettings({ persist: false });
   await refreshList();
   const params = new URLSearchParams(location.search);
+  // back/forward onto a file that has since been closed with ×: show the brief, not the closed file
+  const traversal = performance.getEntriesByType('navigation')[0]?.type === 'back_forward';
+  if (params.has('file') && traversal && !docs.some((d) => d.source === params.get('file'))) {
+    const b = docs.find((d) => d.remote);
+    if (b) { params.delete('file'); params.delete('line'); params.set('brief', new URL(b.remote).pathname); }
+  }
   if (params.has('file')) {
     try { await openSourceFile(params.get('file'), Number(params.get('line')) || 0); }
     catch (err) {

@@ -5,7 +5,7 @@
 // the activate step throws the old one away.
 
 /* BUILD:START */
-const VERSION = 'd6ddecb52768';
+const VERSION = '5be330b80832';
 const ASSETS = [
   './',
   'app.css',
