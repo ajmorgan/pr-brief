@@ -17,6 +17,7 @@ export const defaults = Object.freeze({
   zen: false,
   diffView: 'unified',    // 'unified' | 'split' — how brief hunks render in the preview
   split: 50,              // editor width in split view, percent
+  sidebarWidth: 240,      // sidebar width in pixels (drag its right edge, :set sidebar=N)
   lastDocId: null,
 });
 

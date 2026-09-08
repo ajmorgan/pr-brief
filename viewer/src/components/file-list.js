@@ -100,7 +100,10 @@ export class FileList extends HTMLElement {
       select.setAttribute('aria-selected', String(doc.id === this.#activeId));
       const name = document.createElement('span');
       name.className = 'file-name';
-      name.textContent = doc.name;
+      const bdi = document.createElement('bdi'); // the row clips on the left, the name stays left-to-right
+      bdi.textContent = doc.name;
+      name.append(bdi);
+      name.title = doc.readOnly && doc.source ? doc.source : doc.name;
       const meta = document.createElement('span');
       meta.className = 'file-meta';
       meta.textContent = doc.readOnly ? `${doc.source} @ ${doc.rev}` : (doc.handle ? '⛁ ' : doc.remote ? '⇄ ' : '') + relative(doc.updatedAt);

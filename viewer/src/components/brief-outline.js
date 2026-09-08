@@ -86,8 +86,9 @@ export class BriefOutline extends HTMLElement {
       btn.type = 'button';
       btn.className = 'outline-select';
       btn.dataset.line = String(f.line);
-      btn.innerHTML = `<span class="outline-path"></span><span class="outline-meta"></span>`;
-      btn.querySelector('.outline-path').textContent = f.path;
+      btn.innerHTML = `<span class="outline-path"><bdi></bdi></span><span class="outline-meta"></span>`;
+      btn.querySelector('.outline-path > bdi').textContent = f.path; // <bdi>: the row clips on the left, the path stays left-to-right
+      btn.title = f.path;
       btn.querySelector('.outline-meta').textContent = `${f.status} · ${f.units.length}`;
       li.append(btn);
       const ul = document.createElement('ul');

@@ -24,7 +24,7 @@ const $ = (sel) => document.querySelector(sel);
 const els = {
   app: $('#app'), editor: $('#editor'), preview: $('#preview'), files: $('#files'),
   palette: $('#palette'), status: $('#status'), toast: $('#toast'), help: $('#help'), outline: $('#outline'),
-  workspace: $('#workspace'), name: $('#doc-name'), divider: $('#divider'),
+  workspace: $('#workspace'), name: $('#doc-name'), divider: $('#divider'), sidebarHandle: $('#sidebar-handle'), sidebar: $('#sidebar'),
   install: $('#btn-install'), sidebarToggle: $('#btn-sidebar'),
   dirty: $('#doc-dirty'), docActions: $('#doc-actions'), diffSwitch: $('#diff-switch'), more: $('#more'), moreBtn: $('#btn-more'), moreMenu: $('#more-menu'),
 };
@@ -77,6 +77,7 @@ function applySettings({ persist = true } = {}) {
   els.app.classList.toggle('sidebar-hidden', !sidebarOpen);
   els.app.classList.toggle('zen', settings.zen);
   els.workspace.style.setProperty('--split', `${settings.split}%`);
+  els.app.style.setProperty('--sidebar-w', `${settings.sidebarWidth}px`);
   // a source file has no preview: Edit shows as the live selection, the other two say why they are off
   const md = isMarkdown();
   for (const btn of document.querySelectorAll('button[data-view]')) {
@@ -963,6 +964,11 @@ function applyVimOption(opt) {
     case 'scrollsync': update({ scrollSync: true }); break;
     case 'noscrollsync': update({ scrollSync: false }); break;
     case 'diff': if (value === 'split' || value === 'unified') update({ diffView: value }); else els.toast.show('Use :set diff=split or :set diff=unified', { kind: 'error' }); break;
+    case 'sidebar': { // :set sidebar=320 (pixels; "reset" for the default) — and shows the sidebar
+      const px = value === 'reset' || value === undefined ? SIDEBAR_DEFAULT : Number(value);
+      if (!Number.isFinite(px)) { els.toast.show('Use :set sidebar=<pixels> or :set sidebar=reset', { kind: 'error' }); break; }
+      settings.sidebarWidth = clampSidebar(px); toggleSidebar(true); break;
+    }
     default: els.toast.show(`Unknown option "${opt}"`, { kind: 'error' });
   }
 }
@@ -1192,6 +1198,34 @@ els.divider.addEventListener('pointerdown', (e) => {
   els.divider.addEventListener('pointerup', stop);
 });
 els.divider.addEventListener('dblclick', () => update({ split: 50 }));
+
+// Sidebar handle: drag to resize, double-click to reset, arrows to nudge; :set sidebar=N does the same.
+const SIDEBAR_MIN = 160, SIDEBAR_DEFAULT = 240;
+const sidebarMax = () => Math.max(SIDEBAR_MIN, Math.round(window.innerWidth * 0.6));
+const clampSidebar = (px) => Math.round(Math.min(sidebarMax(), Math.max(SIDEBAR_MIN, px)));
+els.sidebarHandle.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  els.sidebarHandle.setPointerCapture(e.pointerId);
+  els.sidebarHandle.dataset.dragging = '';
+  const left = els.sidebar.getBoundingClientRect().left;
+  const move = (ev) => {
+    settings.sidebarWidth = clampSidebar(ev.clientX - left);
+    els.app.style.setProperty('--sidebar-w', `${settings.sidebarWidth}px`);
+  };
+  const stop = () => {
+    els.sidebarHandle.removeEventListener('pointermove', move);
+    els.sidebarHandle.removeEventListener('pointerup', stop);
+    delete els.sidebarHandle.dataset.dragging;
+    saveSettings(settings);
+  };
+  els.sidebarHandle.addEventListener('pointermove', move);
+  els.sidebarHandle.addEventListener('pointerup', stop);
+});
+els.sidebarHandle.addEventListener('dblclick', () => update({ sidebarWidth: SIDEBAR_DEFAULT }));
+els.sidebarHandle.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowLeft') update({ sidebarWidth: clampSidebar(settings.sidebarWidth - 20) });
+  if (e.key === 'ArrowRight') update({ sidebarWidth: clampSidebar(settings.sidebarWidth + 20) });
+});
 els.divider.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowLeft') update({ split: Math.max(20, settings.split - 5) });
   if (e.key === 'ArrowRight') update({ split: Math.min(80, settings.split + 5) });

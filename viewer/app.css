@@ -8,7 +8,7 @@
   --radius: 6px;
   --toolbar-h: 2.75rem;
   --status-h: 1.6rem;
-  --sidebar-w: 15rem;
+  --sidebar-w: 240px; /* app.js sets it from the sidebarWidth setting */
   /* Fallback palette until themes.js runs (mirrors One Dark). */
   --bg: #282c34; --fg: #abb2bf; --surface: #21252b; --surface2: #2c313a; --border: #181a1f;
   --muted: #5c6370; --accent: #61afef; --accent2: #c678dd; --selection: #3e4451;
@@ -66,6 +66,7 @@ kbd {
   grid-area: sidebar;
   display: flex; flex-direction: column;
   min-height: 0; min-width: 0; overflow: hidden;
+  position: relative; /* for the resize handle on its right edge */
   background: var(--surface);
   border-right: 1px solid var(--border);
 }
@@ -163,7 +164,16 @@ file-list:not([compact]) .file-close-others { display: none; }
 .view-switch .tool-btn { border-radius: 0; border: none; }
 .view-switch .tool-btn + .tool-btn { border-left: 1px solid var(--border); }
 
+/* A path longer than the row: the end (the file name) is what tells files apart, so the row is laid out
+   right-to-left and clips on the left, while the <bdi> keeps the path itself left-to-right. */
+.file-name, .outline-path { direction: rtl; text-align: left; }
+.file-name > bdi, .outline-path > bdi { direction: ltr; unicode-bidi: isolate; }
+
 /* --- Sidebar --------------------------------------------------------------- */
+/* The handle sits on the sidebar's right edge (inside it: the sidebar clips overflow); the ::after widens the hit area. */
+.sidebar-handle { position: absolute; top: 0; bottom: 0; right: 0; width: 4px; cursor: col-resize; touch-action: none; z-index: 2; }
+.sidebar-handle::after { content: ""; position: absolute; inset: 0 -3px 0 -3px; }
+.sidebar-handle:hover, .sidebar-handle:focus-visible, .sidebar-handle[data-dragging] { background: var(--accent); outline: none; }
 file-list {
   display: flex;
   flex-direction: column;
@@ -497,6 +507,7 @@ app-toast {
 /* --- Responsive ------------------------------------------------------------ */
 @media (max-width: 800px) {
   .app { grid-template-columns: 0 1fr; }
+  .sidebar-handle { display: none; } /* the overlay sidebar has one width */
   .app:not(.sidebar-hidden) .sidebar {
     position: fixed; top: var(--toolbar-h); bottom: var(--status-h); left: 0;
     width: min(18rem, 85vw); z-index: 30;

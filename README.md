@@ -108,6 +108,8 @@ each opens its files at its own commit, and × closes one for good in this
 browser (asking for it by URL, or the next `--open`, brings it back). The next
 `--open` adds a brief and brings it to the front.
 
+The sidebar's right edge drags to resize it (`:set sidebar=320` sets the width in pixels, `:set sidebar=reset` restores it); a path longer than the row keeps its end visible and shows in full on hover.
+
 The sidebar stacks **Open** above the **Outline**. Open holds the documents
 in the editor: the brief and the files you have jumped into (× closes, ⊗
 closes the others, the title collapses the list). Outline shows the active

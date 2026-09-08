@@ -37,6 +37,7 @@ const shortcuts = [
     [':sav name', 'Save as a new file on disk'],
     [':colo name', 'Change color scheme (:colo with no name lists them)'],
     [':set wrap | nowrap | nu | nonu | ts=4', 'Editor options'],
+    [':set sidebar=320 | reset', 'Sidebar width in pixels (or drag its right edge; double-click resets)'],
     [':pre', 'Toggle preview / editor'],
     [':sp', 'Split view'],
     [':zen', 'Zen mode'],
