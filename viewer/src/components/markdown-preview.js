@@ -31,11 +31,15 @@ export class MarkdownPreview extends HTMLElement {
 
   render(markdown) {
     const open = this.#openFolds();
+    // the place is kept as a source line, not a pixel offset: a re-render that changes heights above it (unified
+    // to side-by-side hunks, a fold restored, an edit) would otherwise leave the reader somewhere else
+    const at = this.#blocks.length ? this.lineAtScrollTop(this.scrollTop) : null;
     const fragment = renderMarkdown(markdown);
     this.#article.replaceChildren(fragment);
     this.#restoreFolds(open);
     this.#collectBlocks();
     this.#observeSpy();
+    if (at && at.line > 1) this.scrollToLine(at.line, at.fraction);
   }
 
   // Re-rendering replaces the DOM, which would close every <details> the reader opened.
