@@ -142,7 +142,9 @@ previous:
 
 **Callers (by name):** none found
 
-**Method Context:** Wrote an order through `repo.putLegacy` with no validation. No direct replacement; `save` is the remaining write path.
+**Method Context:** Wrote an order through `repo.putLegacy` with no validation.
+
+**Changes:** Deleted; `save`, which now validates, is the remaining write path. No caller referenced it.
 
 ```diff
 -    public void legacySave(Order o) {
@@ -233,7 +235,9 @@ previous:
 
 **Callers (by name):** none found
 
-**Function Context:** Returned the constant `1`. No replacement.
+**Function Context:** Returned the constant `1`.
+
+**Changes:** Deleted with its file; nothing replaces it and no caller referenced it.
 
 ```diff
 -export function gone(): number {

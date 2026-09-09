@@ -1129,7 +1129,9 @@ function main(): void {
         L.push(`**${CALLABLE_KINDS.has(u.kind) ? "Callers" : "References"} (by name):** ${u.callers.total ? u.callers.sites.map(siteLink).join(", ") + ` (${u.callers.total}${extra ? "; " + extra : ""})` : `none found${extra ? " (" + extra + ")" : ""}`}`, "");
       }
       if (u.status === "deleted") {
-        L.push(`${labelOf("did", u.kind)} ${u.slots.did?.text ?? `<<rb:did ${u.id} | step 1: concise summary, past tense: what this ${u.kind} ${verbs.past}; if you can see what replaced it, name the replacement>>`}`, "");
+        // a deleted unit keeps a Changes line: the deletion is the change, and the reader should not have to infer it from a missing label
+        L.push(`${labelOf("did", u.kind)} ${u.slots.did?.text ?? `<<rb:did ${u.id} | step 1: concise summary, past tense: what this ${u.kind} ${verbs.past}>>`}`, "");
+        L.push(`${labelOf("change")} ${u.slots.change?.text ?? `<<rb:change ${u.id} | step 1: one concise line, starting with the word Deleted: what its removal takes away, and what replaces it when you can see it${u.callers ? "; a caller listed above is now broken unless it was changed too" : ""}>>`}`, "");
       } else {
         L.push(`${labelOf("does", u.kind)} ${u.slots.does?.text ?? `<<rb:does ${u.id} | step 1: concise summary, present tense: what this ${u.kind} ${verbs.now}${u.callers ? "; may cite the callers line above" : ""}>>`}`, "");
         if (u.status === "modified") {

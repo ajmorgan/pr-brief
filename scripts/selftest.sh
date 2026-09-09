@@ -576,6 +576,7 @@ node "$SK/scripts/extract.ts" --path reg --out "$TMP/reg.md" >/dev/null
 R="$TMP/reg.md"
 grep -q '^## \[`reg/renamed.ts`\](reg/renamed.ts) — renamed from `reg/old.ts`$' "$R" || { echo "FAIL: renamed file heading missing"; grep -n '^## ' "$R"; exit 1; }
 grep -q '^## `reg/del.ts` — deleted$' "$R" || { echo "FAIL: deleted file heading missing"; grep -n '^## ' "$R"; exit 1; }
+grep -q '^\*\*Changes:\*\* <<rb:change reg/del.ts#doomed |' "$R" || { echo "FAIL: a deleted unit has no Changes slot"; exit 1; }
 grep -q '^## \[`reg/notes.txt`\](reg/notes.txt) — modified · whole file$' "$R" || { echo "FAIL: whole-file heading missing for .txt"; grep -n '^## ' "$R"; exit 1; }
 grep -q 'no unit rules for .txt' "$R" || { echo "FAIL: the whole-file unit does not say why"; exit 1; }
 grep -q '^--- helper docs$' "$R" || { echo "FAIL: the deleted Lua comment line is missing from its hunk"; exit 1; }

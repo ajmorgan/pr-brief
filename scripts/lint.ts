@@ -123,7 +123,7 @@ function main(): void {
     }
     const u = units.get(s.id);
     if (!u) continue;
-    const want = s.kind === "other" || s.kind === "file" ? ["other"] : s.status === "deleted" ? ["did"] : s.status === "new" ? ["does"] : ["does", "change"];
+    const want = s.kind === "other" || s.kind === "file" ? ["other"] : s.status === "deleted" ? ["did", "change"] : s.status === "new" ? ["does"] : ["does", "change"];
     for (const key of want) {
       const v = u.slots[key];
       const label = key === "other" ? `- … ${s.id}` : `${labelOf(key === "does" && s.status === "deleted" ? "did" : key, s.kind)} ${s.id}`;
