@@ -815,6 +815,7 @@ export interface Config {
     assert(r.status === 200, `status ${r.status}: ${r.text.slice(0, 120)}`);
     const j = JSON.parse(r.text);
     assert(j.slug === slug(shaOne), `slug ${j.slug}`);
+    assert(j.tabs >= 1, `tabs ${j.tabs}: the open tab holds an /events stream, so a CLI hand-off would not open another`);
     await wait(2500);
     const s = await state();
     assert(s.name === `pr-brief-${shaOne}.md`, `the tab shows ${s.name} at ${s.search}; open: ${s.open.join(", ")}; toast: ${s.toast.slice(0, 80)}`);

@@ -126,9 +126,20 @@ node ~/.claude/skills/pr-brief/scripts/lint.ts <path>
 
 Repeat until exit 0.
 
-### Step 5 — Report
+### Step 5 — Open and report
 
-Print, and nothing else:
+Run exactly:
+
+```
+node ~/.claude/skills/pr-brief/scripts/viewer.ts --detach --out <path>
+```
+
+It opens the brief in the default browser (starting the viewer in the
+background, or handing the brief to the viewer already running and opening
+a tab when none is connected), prints one line and returns. Do not act on
+its output; a non-zero exit is not an error of the brief.
+
+Then print, and nothing else:
 
 1. The path `<path>`, as extract printed it.
 2. The bullet lines of the summary block (the lines starting with `> -`),

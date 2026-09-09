@@ -72,8 +72,11 @@ references/example-brief.md
 
 ## Reading a brief
 
-`/pr-brief --open` (or `node scripts/viewer.ts`) serves the bundled editor
-and opens the brief in **brief mode**: an outline of files and units in the
+The skill opens the finished brief in your default browser as its last step
+(`--open` also opens it at the start, while the slots are still being filled;
+`node scripts/viewer.ts` opens one by hand). A start hands the brief to a
+viewer already running and opens a tab only when none is connected. The
+bundled editor shows it in **brief mode**: an outline of files and units in the
 sidebar that follows the preview as you scroll, hunks folded, vim throughout.
 The tab updates itself the moment the brief is rewritten on disk (server-sent
 events; only a brief opened from a local file still polls), and only the file

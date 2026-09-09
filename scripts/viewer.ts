@@ -2,7 +2,7 @@
 // viewer.ts — serve the vendored editor (viewer/) on localhost and hand it the
 // brief. Zero dependencies.
 //
-//   node scripts/viewer.ts [--out FILE (default: the brief extract wrote last)] [--port N (default 8790)] [--no-open] [--verbose]
+//   node scripts/viewer.ts [--out FILE (default: the brief extract wrote last)] [--port N (default 8790)] [--no-open] [--detach] [--verbose]
 //   node scripts/viewer.ts --stop        ask the running viewer to exit
 //
 // Trust: the server answers to localhost only, and the writing routes trust two parties. A tab of the
@@ -54,6 +54,7 @@ const args = process.argv.slice(2);
 const opt = (name: string, dflt: string | null = null): string | null => { const i = args.indexOf(name); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : dflt; };
 const port = Number(opt("--port", "8790")); // fixed by default: the browser keeps settings and documents per origin
 const noOpen = args.includes("--no-open");
+const detach = args.includes("--detach"); // when a server has to be started, start it in the background and return at once (SKILL.md's last step)
 const verbose = args.includes("--verbose"); // log every request
 const stop = args.includes("--stop"); // tell the running viewer to exit
 // The per-server secret: written by the serving process (see onListen), read by the CLI paths that talk
@@ -385,7 +386,8 @@ const server = createServer(async (req, res) => {
       watchBriefs();
       broadcastMeta();
       res.writeHead(200, { "Content-Type": types[".json"] });
-      return res.end(JSON.stringify({ ok: true, path: b.path, slug: b.slug, url: `/briefs/${b.slug}` }));
+      // tabs: open tabs hold one /events stream each; a caller with none to follow the switch opens a browser
+      return res.end(JSON.stringify({ ok: true, path: b.path, slug: b.slug, url: `/briefs/${b.slug}`, tabs: clients.size }));
     }
     // static: decode first (the URL parser leaves %2f alone), refuse any `..` segment, then contain on a
     // whole path component so a sibling named viewer* is never served
@@ -403,8 +405,18 @@ const server = createServer(async (req, res) => {
   }
 });
 
-// If a pr-brief viewer is already running on the port, hand it this brief and
-// exit: the open tab follows the switch by itself. Otherwise start serving.
+// The default browser, at url. A missing opener (headless Linux, a container) is reported, never fatal.
+function openBrowser(url: string): void {
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const argv = process.platform === "win32" ? ["/c", "start", "", url] : [url]; // `start` is a cmd.exe builtin, not an executable
+  const child = spawn(cmd, argv, { stdio: "ignore", detached: true });
+  child.on("error", (e: NodeJS.ErrnoException) => process.stderr.write(`could not open a browser (${e.code ?? e.message}); open ${url} in your browser\n`));
+  child.unref();
+}
+
+// If a pr-brief viewer is already running on the port, hand it this brief and exit: an open tab follows
+// the switch by itself, and when no tab is connected a browser is opened on it, so the brief always
+// comes up. Otherwise start serving.
 async function main() {
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE" && port !== 0) { process.stderr.write(`port ${port} in use by something else — picking a free one\n`); server.listen(0, "127.0.0.1"); }
@@ -416,14 +428,30 @@ async function main() {
       if (meta) {
         const token = readToken(port);
         const r = token ? await fetch(`http://127.0.0.1:${port}/switch`, { method: "POST", headers: { "X-Viewer-Token": token }, body: JSON.stringify({ path: briefPath, root }) }) : null;
-        if (r?.ok) { const j = await r.json().catch(() => ({})); process.stdout.write(`pr-brief viewer already running: http://127.0.0.1:${port}/?brief=${j.url ?? "/brief"} now shows ${shortPath(briefPath)} (the open tab updates itself)\n`); return; }
+        if (r?.ok) {
+          const j = await r.json().catch(() => ({}));
+          const url = `http://127.0.0.1:${port}/?brief=${j.url ?? "/brief"}`;
+          const tabs = typeof j.tabs === "number" ? j.tabs : 1; // an older server says nothing: assume a tab, as before
+          process.stdout.write(`pr-brief viewer already running: ${url} now shows ${shortPath(briefPath)} (${tabs ? `the open tab${tabs > 1 ? "s update themselves" : " updates itself"}` : noOpen ? "no tab is open; --no-open given" : "no tab was open: opening one"})\n`);
+          if (!tabs && !noOpen) openBrowser(url);
+          return;
+        }
         // a viewer we cannot talk to (another user's, or a stale token): serve on a free port instead of failing
         process.stderr.write(`pr-brief viewer on port ${port} ${token ? `refused the hand-off (HTTP ${r?.status})` : `was not started by you (no token at ${tokenFile(port)})`} — picking a free port\n`);
-        server.listen(0, "127.0.0.1"); return;
+        serve(0); return;
       }
     } catch { /* nothing listening: start our own */ }
   }
-  server.listen(port, "127.0.0.1");
+  serve(port);
+}
+// Serve on port p (0: a free one) — with --detach, from a copy of this process in the background, so the
+// caller (an agent's shell) is not held by a server that outlives it.
+function serve(p: number): void {
+  if (!detach) { server.listen(p, "127.0.0.1"); return; }
+  const rest = args.filter((a, i) => a !== "--detach" && a !== "--port" && args[i - 1] !== "--port");
+  const child = spawn(process.execPath, [process.argv[1], ...rest, "--port", String(p)], { cwd: process.cwd(), stdio: "ignore", detached: true });
+  child.unref();
+  process.stdout.write(`pr-brief viewer starting in the background${p ? ` on http://127.0.0.1:${p}/` : " on a free port"} for ${shortPath(briefPath)}${noOpen ? "" : " — opening a browser"}\n`);
 }
 server.once("listening", onListen); // once, however many listen() attempts it takes
 main();
@@ -443,12 +471,5 @@ function onListen() {
   writeToken(p);
   const url = `http://127.0.0.1:${p}/?brief=/briefs/${cur().slug}`;
   process.stdout.write(`pr-brief viewer: ${url}\n  serving ${shortPath(briefPath)}${briefs.size > 1 ? ` and ${briefs.size - 1} more brief${briefs.size > 2 ? "s" : ""} from ${shortPath(stateRootOf(root))}/` : ""} — Ctrl-C to stop\n`);
-  if (!noOpen) {
-    // no browser opener (headless Linux, a container) must not take the server down with it
-    const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-    const argv = process.platform === "win32" ? ["/c", "start", "", url] : [url]; // `start` is a cmd.exe builtin, not an executable
-    const child = spawn(cmd, argv, { stdio: "ignore", detached: true });
-    child.on("error", (e: NodeJS.ErrnoException) => process.stderr.write(`could not open a browser (${e.code ?? e.message}); open ${url} in your browser\n`));
-    child.unref();
-  }
+  if (!noOpen) openBrowser(url);
 }
