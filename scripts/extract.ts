@@ -1125,8 +1125,19 @@ function main(): void {
       L.push(h, marker, "");
       expected.push(h, marker);
       if (u.callers) {
+        const label = `**${CALLABLE_KINDS.has(u.kind) ? "Callers" : "References"} (by name):**`;
         const extra = [u.callers.total > CALLER_CAP ? `first ${CALLER_CAP} shown` : "", u.callers.note ?? ""].filter(Boolean).join("; ");
-        L.push(`**${CALLABLE_KINDS.has(u.kind) ? "Callers" : "References"} (by name):** ${u.callers.total ? u.callers.sites.map(siteLink).join(", ") + ` (${u.callers.total}${extra ? "; " + extra : ""})` : `none found${extra ? " (" + extra + ")" : ""}`}`, "");
+        const { total, sites } = u.callers;
+        if (!total) L.push(`${label} none found${extra ? " (" + extra + ")" : ""}`, "");
+        else {
+          // the count on the label line, then one bullet per file with its lines linked: one shape whatever the count,
+          // and twenty sites never run into a wall of text
+          const byFile = new Map<string, number[]>();
+          for (const s of sites) { const i = s.lastIndexOf(":"); const p = s.slice(0, i); if (!byFile.has(p)) byFile.set(p, []); byFile.get(p)!.push(+s.slice(i + 1)); }
+          L.push(`${label} ${total} in ${byFile.size} file${byFile.size === 1 ? "" : "s"}${extra ? " (" + extra + ")" : ""}`);
+          for (const [p, lines] of byFile) L.push(`- ${link(p, p, lines[0])} ${lines.map((n) => link(String(n), p, n)).join(", ")}`);
+          L.push("");
+        }
       }
       if (u.status === "deleted") {
         // a deleted unit keeps a Changes line: the deletion is the change, and the reader should not have to infer it from a missing label

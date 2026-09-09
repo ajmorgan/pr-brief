@@ -167,7 +167,7 @@ For every `modified` and `deleted` unit of kind `function`/`method`/`constructor
 - Java: `method_invocation` whose name is `name`; `object_creation_expression` for constructors.
 - C, C++, C#: the same shapes in ast-grep's `context`/`selector` pattern form, since a bare call is not a statement in those grammars; C++ and Rust also `->` and `Type::name(` calls; Haskell any use of the name outside a declaration's own name position (`callerPatterns` in `extract.ts`).
 
-Run as an ast-grep rule over the repo, restricted to the same language, excluding the unit's own definition. Result: a list of `path:line`, capped at 20 with a total count. This is **name-based, not type-resolved** — a common method name (`get`, `run`) will over-match. The list is labelled *Callers (by name)* so the reviewer knows what it is. Two cheap corrections make the common wrong cases honest, and the line says when they applied: a declaration other files cannot call (a top-level function that is not `export`ed in TS/JS, a `private` member in Java, Kotlin or TS, an unexported name in Go) keeps only the sites that could reach it; and a file that declares the same name itself is taken to be calling its own, so its sites are dropped (`main` in three scripts lists one caller, not three). Units with zero hits get `Callers: none found`.
+Run as an ast-grep rule over the repo, restricted to the same language, excluding the unit's own definition. Result: a list of `path:line`, capped at 20: the total and the notes sit on the label line (`Callers (by name): 7 in 3 files`) and the sites follow as one bullet per file, the file linked and each line linked (`- path 12, 40`). This is **name-based, not type-resolved** — a common method name (`get`, `run`) will over-match. The list is labelled *Callers (by name)* so the reviewer knows what it is. Two cheap corrections make the common wrong cases honest, and the line says when they applied: a declaration other files cannot call (a top-level function that is not `export`ed in TS/JS, a `private` member in Java, Kotlin or TS, an unexported name in Go) keeps only the sites that could reach it; and a file that declares the same name itself is taken to be calling its own, so its sites are dropped (`main` in three scripts lists one caller, not three). Units with zero hits get `Callers: none found`.
 
 Class-like units (`class`, `interface`, `enum`, `record`, `annotation`, `type`) are not called; they are referenced (`X.class`, `@X`, `new X(`, a type position). For those, extract runs `git grep` for the bare name across the repo (at the commit, or the working tree plus untracked files), skipping the declaring file and `import` lines, and labels the result *References (by name)* with the same cap and count.
 
@@ -300,7 +300,9 @@ Node-kind names must be verified against the ast-grep version in use.
 ### `save(Order o)` — modified · [`OrderService.java:41-68`](src/orders/OrderService.java#L41)[ · renamed from `x`][ · container only (members listed separately)][ · changed since last]
 <!-- rb:unit id="…" kind="method" status="modified" hash="…" -->
 
-**Callers (by name):** [`OrderController.java:88`](…), [`BatchImport.java:141`](…) (2)   ← generated, immutable; **References (by name):** for class-like units
+**Callers (by name):** 2 in 2 files   ← generated, immutable; **References (by name):** for class-like units
+- [`OrderController.java`](…) [`88`](…)
+- [`BatchImport.java`](…) [`141`](…)
 
 **Method Context:** <concise summary — SLOT; may say how the callers use it>
 

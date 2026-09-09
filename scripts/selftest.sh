@@ -547,6 +547,11 @@ export function run(): void {
   console.log(shared(3));
 }
 EOF4
+cat > more.ts <<'EOF4'
+import { shared } from "./doc.ts";
+export function a(): number { return shared(1); }
+export function b(): number { return shared(2) + shared(3); }
+EOF4
 printf 'real\n' > real.txt && ln -s real.txt link.txt
 printf 'export function q(): number { return 1; }\n' > 'quo"te.ts'
 printf 'export function sp(): number { return 1; }\n' > 'sp ace.ts'
@@ -559,7 +564,7 @@ sedi 's/return x + 1;/return x + 2;/' reg/doc.ts
 rm reg/link.txt && printf 'now a file\n' > reg/link.txt
 sedi 's/return 1;/return 2;/' 'reg/quo"te.ts' 'reg/sp ace.ts'
 expected5="deleted function reg/del.ts#doomed - 1-1
-modified function reg/doc.ts#shared 1-2 1-2 callers=2
+modified function reg/doc.ts#shared 1-2 1-2 callers=4
 modified file reg/link.txt#(file) - - unsupported-language
 modified other reg/m.lua#(top-level)@2 - 2-2
 deleted function reg/m.lua#helper - 3-5
@@ -584,7 +589,10 @@ grep -q '^-real.txt$' "$R" && grep -q '^+now a file$' "$R" || { echo "FAIL: the 
 grep -q '^<!-- rb:file path="reg/quo"te.ts" hash="[0-9a-f]\{16\}" -->$' "$R" || { echo "FAIL: quoted path marker malformed"; grep -n 'rb:file' "$R"; exit 1; }
 grep -q '^<!-- rb:file path="reg/sp ace.ts" hash="[0-9a-f]\{16\}" -->$' "$R" || { echo "FAIL: spaced path marker malformed"; grep -n 'rb:file' "$R"; exit 1; }
 grep -q 'hash="e3b0c44298fc1c14"' "$R" && { echo "FAIL: a file was hashed as empty content (its path was not read back)"; exit 1; }
-grep -q '^\*\*Callers (by name):\*\* \[`reg/use.ts:3`\](reg/use.ts#L3), \[`reg/use.ts:4`\](reg/use.ts#L4) (2)$' "$R" || { echo "FAIL: callers of a documented exported function"; grep -n 'Callers' "$R"; exit 1; }
+# four sites in two files: the count on the label line, then one bullet per file with its lines linked
+grep -q '^\*\*Callers (by name):\*\* 4 in 2 files$' "$R" || { echo "FAIL: callers of a documented exported function"; grep -n 'Callers' "$R"; exit 1; }
+grep -q '^- \[`reg/more.ts`\](reg/more.ts#L2) \[`2`\](reg/more.ts#L2), \[`3`\](reg/more.ts#L3)$' "$R" || { echo "FAIL: callers bullet for reg/more.ts"; grep -n -A3 'Callers' "$R"; exit 1; }
+grep -q '^- \[`reg/use.ts`\](reg/use.ts#L3) \[`3`\](reg/use.ts#L3), \[`4`\](reg/use.ts#L4)$' "$R" || { echo "FAIL: callers bullet for reg/use.ts"; grep -n -A3 'Callers' "$R"; exit 1; }
 git reset -q --hard HEAD && git clean -fdq -- reg
 [ -L reg/link.txt ] && [ -f reg/old.ts ] && [ ! -f reg/renamed.ts ] || { echo "FAIL: teardown of the reg fixture"; exit 1; }
 
