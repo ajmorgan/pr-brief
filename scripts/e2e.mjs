@@ -709,6 +709,23 @@ export interface Config {
     assert(s.open.some((n) => n.startsWith("pr-brief-")), "the briefs were closed too");
     return "source files closed, briefs kept";
   });
+  await check("a ```mermaid fence is drawn as SVG, and a fence mermaid cannot parse says why", async () => {
+    await page.evaluate(() => document.querySelector("#btn-new").click());
+    await wait(600);
+    await setView("split");
+    await page.evaluate(() => document.querySelector("editor-pane").setValue("# d\n\n```mermaid\nflowchart LR\n  A[brief] --> B[review]\n```\n\n```mermaid\nnot a diagram\n```\n"));
+    try { await page.waitForFunction(() => document.querySelectorAll("markdown-preview .mermaid[data-mermaid]:not([data-mermaid=pending])").length === 2, null, { timeout: LOAD_TIMEOUT }); }
+    catch { throw new Error(`the diagrams were still pending after ${LOAD_TIMEOUT / 1000} s — is vendor/mermaid.js built?`); }
+    const s = await page.evaluate(() => ({
+      svg: document.querySelectorAll("markdown-preview .mermaid[data-mermaid=done] svg").length,
+      labels: [...document.querySelectorAll("markdown-preview .mermaid svg")].map((e) => e.textContent).join(" "),
+      error: document.querySelector("markdown-preview .mermaid-error")?.textContent ?? "",
+    }));
+    assert(s.svg === 1, `${s.svg} diagrams drawn, expected 1`);
+    assert(/brief/.test(s.labels) && /review/.test(s.labels), "the node labels are missing from the SVG");
+    assert(/^Mermaid: /.test(s.error), `no error shown for the broken fence: "${s.error}"`);
+    return `1 diagram drawn; ${s.error.slice(0, 60)}`;
+  });
 
   // ---- the server's contract, from the browser (a tab: same-origin Origin) and from outside it (Node: no Origin)
   await check("GET /briefs lists every served brief with its repository", async () => {

@@ -2,6 +2,7 @@
 // syntax-highlighted fenced code using the same Lezer grammars as the editor.
 
 import { marked, DOMPurify, highlightCode, classHighlighter, LanguageDescription, languages } from '../../vendor/editor.js';
+import { mountMermaid } from './mermaid.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -78,6 +79,10 @@ marked.use({
     },
     code({ text, lang }) {
       const name = (lang || '').trim().split(/\s+/)[0];
+      if (name === 'mermaid') {
+        // a placeholder showing the source; src/lib/mermaid.js draws the SVG into it (see renderMarkdown)
+        return `<div class="mermaid" data-mermaid="pending"><pre><code class="language-mermaid">${escapeHtml(text)}</code></pre></div>\n`;
+      }
       const isBriefDiff = briefRendering && name === 'diff';
       const html = isBriefDiff ? (briefSplit ? highlightDiffSplit(text, briefLang) : highlightDiff(text, briefLang)) : highlight(text, name);
       const cls = name ? ` class="language-${escapeAttr(name)}${isBriefDiff && briefSplit ? ' diff-split' : ''}"` : '';
@@ -180,6 +185,7 @@ export function renderMarkdown(src) {
       template.innerHTML = DOMPurify.sanitize(html, purifyConfig);
       const first = template.content.firstElementChild;
       if (first) first.dataset.line = String(line);
+      for (const el of template.content.querySelectorAll('.mermaid[data-mermaid="pending"]')) mountMermaid(el);
       (unit ?? section ?? fragment).append(template.content);
     }
     line += lines;

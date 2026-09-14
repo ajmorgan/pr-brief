@@ -1,8 +1,9 @@
 // Build script.
 //
-// 1. Bundles third-party editor libraries into vendor/editor.js so the app
-//    works fully offline (no CDN). The app code itself stays as plain,
-//    unbundled ES modules — see app.js and src/.
+// 1. Bundles third-party libraries so the app works fully offline (no CDN):
+//    the editor libraries into vendor/editor.js, mermaid into vendor/mermaid.js
+//    (loaded only when a document has a diagram). The app code itself stays as
+//    plain, unbundled ES modules — see app.js and src/.
 // 2. Stamps sw.js with the list of app files and a content hash, so a new
 //    deploy installs a fresh cache automatically.
 //
@@ -18,10 +19,10 @@ const watch = process.argv.includes('--watch');
 const stampOnly = process.argv.includes('--stamp');
 
 const bundleOptions = {
-  entryPoints: ['src/vendor-entry.js'],
+  entryPoints: [{ in: 'src/vendor-entry.js', out: 'editor' }, { in: 'src/mermaid-entry.js', out: 'mermaid' }],
   bundle: true,
   format: 'esm',
-  outfile: 'vendor/editor.js',
+  outdir: 'vendor',
   minify: !watch,
   sourcemap: watch ? 'inline' : false,
   target: ['es2022'],
@@ -40,21 +41,30 @@ async function walk(dir) {
   return out;
 }
 
-/** Stamp the vendor bundle's content hash into index.html (import map + preload). */
+const VENDOR = ['vendor/editor.js', 'vendor/mermaid.js'];
+
+/** Stamp each vendor bundle's content hash into index.html (import map + preload). Returns the stamped paths. */
 async function stampVendor() {
-  const hash = createHash('sha256').update(await readFile('vendor/editor.js')).digest('hex').slice(0, 12);
-  const html = await readFile('index.html', 'utf8');
-  const next = html.replace(/vendor\/editor\.js\?v=[0-9a-z]+/g, `vendor/editor.js?v=${hash}`);
-  if (next !== html) { await writeFile('index.html', next); console.log(`index.html stamped: vendor ${hash}`); }
-  return hash;
+  let html = await readFile('index.html', 'utf8');
+  const before = html;
+  const stamped = [];
+  for (const file of VENDOR) {
+    let hash;
+    try { hash = createHash('sha256').update(await readFile(file)).digest('hex').slice(0, 12); }
+    catch { console.warn(`${file} is not built (npm run build); left out of the cache list`); continue; }
+    const re = new RegExp(`${file.replace(/[./]/g, '\\$&')}\\?v=[0-9a-z]+`, 'g');
+    html = html.replace(re, `${file}?v=${hash}`);
+    stamped.push(file, `${file}?v=${hash}`);
+  }
+  if (html !== before) { await writeFile('index.html', html); console.log(`index.html stamped: ${stamped.filter((s) => s.includes('?')).join(', ')}`); }
+  return stamped;
 }
 
 async function stampServiceWorker() {
-  const vendorHash = await stampVendor();
-  const roots = ['index.html', 'app.css', 'app.js', 'manifest.webmanifest', 'vendor/editor.js', `vendor/editor.js?v=${vendorHash}`];
+  const roots = ['index.html', 'app.css', 'app.js', 'manifest.webmanifest', ...await stampVendor()];
   const files = [
     ...roots,
-    ...(await walk('src')).filter((f) => !f.endsWith('vendor-entry.js')),
+    ...(await walk('src')).filter((f) => !f.endsWith('-entry.js')),
     ...(await walk('icons')),
   ].map((f) => f.split(path.sep).join('/')).sort();
 

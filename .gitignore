@@ -4,3 +4,4 @@ viewer/node_modules/
 .DS_Store
 *.log
 # briefs are written into the repo being reviewed, never here
+viewer/vendor/mermaid.js

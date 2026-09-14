@@ -5,7 +5,7 @@
 // the activate step throws the old one away.
 
 /* BUILD:START */
-const VERSION = '78cb530b0f48';
+const VERSION = 'a592222e4097';
 const ASSETS = [
   './',
   'app.css',
@@ -30,6 +30,7 @@ const ASSETS = [
   'src/lib/brief.js',
   'src/lib/files.js',
   'src/lib/markdown.js',
+  'src/lib/mermaid.js',
   'src/lib/settings.js',
   'src/lib/state.js',
   'src/lib/store.js',
@@ -37,6 +38,8 @@ const ASSETS = [
   'src/welcome.js',
   'vendor/editor.js',
   'vendor/editor.js?v=9b64368cdc14',
+  'vendor/mermaid.js',
+  'vendor/mermaid.js?v=1004c7e91a88',
 ];
 /* BUILD:END */
 

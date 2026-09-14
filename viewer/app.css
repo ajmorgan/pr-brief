@@ -359,6 +359,11 @@ markdown-preview {
   line-height: 1.5;
 }
 .markdown-body pre code { background: none; padding: 0; font-size: 0.85em; }
+/* ```mermaid: the source shows dimmed until the diagram is drawn (src/lib/mermaid.js), then the SVG replaces it */
+.markdown-body .mermaid { margin: 0 0 1em; overflow-x: auto; }
+.markdown-body .mermaid[data-mermaid="pending"] pre { opacity: 0.6; }
+.markdown-body .mermaid svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.markdown-body .mermaid-error { margin: 0 0 0.4em; font: 0.85em var(--mono); color: var(--syn-invalid, #ff5370); }
 .markdown-body table { border-collapse: collapse; display: block; overflow-x: auto; max-width: 100%; }
 .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 0.4em 0.8em; text-align: left; }
 .markdown-body th { background: var(--surface); }
