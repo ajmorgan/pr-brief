@@ -1,2 +1,4 @@
 viewer/vendor/editor.js linguist-generated=true
+viewer/vendor/mermaid.js linguist-generated=true
+viewer/vendor/*.LEGAL.txt linguist-generated=true
 viewer/package-lock.json linguist-generated=true

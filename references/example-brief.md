@@ -1,7 +1,7 @@
 ---
 pr-brief: 1
 key: feature
-root: /Users/adammorgan/review/rb-fixture
+root: /Users/reviewer/code/example
 mode: branch
 base: f087cbd29c7bfe6ee5ed9d50e201a3ad74639d27
 head: f36e06b2f1155c7f2b1a473adcd99f65dddc71fe

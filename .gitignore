@@ -1,7 +1,6 @@
-# the skill is self-contained; nothing generated belongs in the repo
+# Runtime state and local dependencies stay out; release bundles are tracked.
 viewer/node_modules/
 .playwright-mcp/
 .DS_Store
 *.log
 # briefs are written into the repo being reviewed, never here
-viewer/vendor/mermaid.js

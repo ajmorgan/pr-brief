@@ -27,7 +27,7 @@ const bundleOptions = {
   sourcemap: watch ? 'inline' : false,
   target: ['es2022'],
   logLevel: 'info',
-  legalComments: 'none',
+  legalComments: 'external',
 };
 
 async function walk(dir) {
