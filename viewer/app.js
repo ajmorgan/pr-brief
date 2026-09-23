@@ -90,10 +90,10 @@ function applySettings({ persist = true } = {}) {
   // brief mode: the diff layout is the one option worth a control; New/Open/Save only apply to ordinary files
   els.diffSwitch.hidden = !brief;
   for (const btn of els.diffSwitch.querySelectorAll('button[data-diff]')) btn.setAttribute('aria-pressed', String(btn.dataset.diff === settings.diffView));
-  els.docActions.hidden = !!(active?.remote || active?.readOnly);
+  els.docActions.hidden = !!(brief || active?.readOnly);
   // a served brief is named by the server, a read-only source copy by the repository: neither is renamed here
   els.name.readOnly = !!(active?.remote || active?.readOnly);
-  els.name.title = els.name.readOnly ? (active.remote ? 'Named by the pr-brief viewer' : 'Read-only copy: the name is the file\'s') : 'Rename (Enter to confirm)';
+  els.name.title = els.name.readOnly ? (active.remote ? 'Named by the xor server' : 'Read-only copy: the name is the file\'s') : 'Rename (Enter to confirm)';
   const checks = { vim: settings.vim, wrap: settings.lineWrap, numbers: settings.lineNumbers, sync: settings.scrollSync };
   for (const [k, v] of Object.entries(checks)) els.moreMenu.querySelector(`[data-menu="${k}"]`)?.setAttribute('aria-checked', String(!!v));
   els.moreMenu.querySelector('[data-menu="zen"]').textContent = settings.zen ? 'Leave zen mode' : 'Zen mode';
@@ -924,7 +924,7 @@ async function openRemoteBrief(url, { baseline = true } = {}) {
   } else {
     doc = await createDocument({ name: fresh.name, content: fresh.content, remote: url, mtime: fresh.mtime, path: fresh.meta?.path ?? null });
   }
-  els.toast.show(`Opened ${fresh.name} from the pr-brief viewer`);
+  els.toast.show(`Opened ${fresh.name} from xor`);
   await syncBriefs(fresh.meta, url);
 }
 

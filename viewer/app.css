@@ -320,6 +320,9 @@ markdown-preview {
   font-size: 1rem;
   word-wrap: break-word;
 }
+
+/* Preview-only is the reading surface: use the whole workspace. Split view keeps the prose measure. */
+.app[data-view="preview"] .markdown-body { max-width: none; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
   color: var(--syn-heading, var(--fg));
